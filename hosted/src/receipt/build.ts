@@ -1,7 +1,7 @@
 import { HOSTED_VERSION, PRODUCER_NAME, SCHEMA_VERSION } from "../constants";
 import { diffGitHub } from "../github/diff";
 import type { AfterRead, GitHubSnapshot } from "../github/types";
-import type { ClaimInput, Counts, Receipt } from "./types";
+import type { ClaimInput, Counts, Receipt, RecordedAction } from "./types";
 import { applyClaims } from "./claims";
 
 export function buildReceipt(input: {
@@ -75,6 +75,44 @@ function countChanges(changes: Receipt["changes"], claims: Receipt["claims"], ch
   return counts;
 }
 
+export function buildActionReceipt(input: {
+  receiptId: string;
+  startedAt: string;
+  checkedAt: string;
+  timeZone: string;
+  actions: RecordedAction[];
+}): Receipt {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    id: input.receiptId,
+    generatedAt: input.checkedAt,
+    readOnly: true,
+    producer: { name: PRODUCER_NAME, version: HOSTED_VERSION },
+    snapshot: { id: "none", takenAt: input.startedAt },
+    comparedAt: input.checkedAt,
+    timeZone: input.timeZone,
+    session: { startedAt: input.startedAt, checkedAt: input.checkedAt },
+    github: {
+      repos: [],
+      diffMode: "snapshot",
+      truncatedSnapshot: false,
+      truncatedChanges: false,
+      suppressedRemovals: false,
+    },
+    counts: countChanges([], [], false),
+    changes: [],
+    claimsChecked: false,
+    claims: [],
+    actions: input.actions,
+    notes: [
+      "This receipt lists tool calls Life Diff forwarded. Each one is marked reported by the proxy.",
+      "A proxied call is not proof the service changed. Verified lines come from a service that exposes history, such as GitHub.",
+      "Life Diff did not run a GitHub snapshot for this session, so there is no verified GitHub diff.",
+      `Times are shown in ${input.timeZone}.`,
+    ],
+  };
+}
+
 export function plainSummary(receipt: Receipt): string {
   const lines = [`${receipt.counts.added} added, ${receipt.counts.removed} removed, ${receipt.counts.modified} modified`];
   for (const change of receipt.changes) {
@@ -86,6 +124,7 @@ export function plainSummary(receipt: Receipt): string {
       if (claim.status === "missing") lines.push(`Missing: ${claim.target}. ${claim.reason}`);
     }
   }
+  for (const action of receipt.actions ?? []) lines.push(action.summary);
   return lines.join("\n");
 }
 

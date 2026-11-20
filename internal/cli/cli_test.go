@@ -144,6 +144,39 @@ func TestUsageAndMissingSnapshot(t *testing.T) {
 	}
 }
 
+func TestReceiptRendersProxyLogWithoutProviderReceipt(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "actions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "latest"), []byte("act_test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"time":"2026-04-02T15:00:00Z","upstream":"deepwiki","tool":"read_wiki_structure","arguments":{"repoName":"facebook/react"},"ok":true,"status":"ok","summary":"Looked up \"facebook/react\" in Deepwiki.","effect":"read","tone":"read","source":"proxy"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "act_test.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"receipt", "--html", filepath.Join(home, "out.html")}, &stdout, &stderr, Options{Home: home})
+	if code != 0 {
+		t.Fatalf("%d %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `Looked up "facebook/react" in Deepwiki.`) {
+		t.Fatal(stdout.String())
+	}
+	body, err := os.ReadFile(filepath.Join(home, "out.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "Reported by proxy") || !strings.Contains(string(body), "#5c564c") {
+		t.Fatal(string(body))
+	}
+	if !strings.Contains(string(body), "<details>") {
+		t.Fatal("read-only calls should be collapsed")
+	}
+}
+
 type memCal struct {
 	window  []lifediff.CalendarEvent
 	token   string

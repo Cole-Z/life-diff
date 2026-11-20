@@ -9,6 +9,7 @@ import type {
   ReceiptMeta,
   ReceiptRow,
   SessionRow,
+  UpstreamRecord,
 } from "./types";
 
 export class MemoryMetadataStore implements MetadataStore {
@@ -17,6 +18,7 @@ export class MemoryMetadataStore implements MetadataStore {
   installations = new Map<string, InstallationRow[]>();
   sessions = new Map<string, SessionRow>();
   receipts = new Map<string, ReceiptRow>();
+  upstreams = new Map<string, UpstreamRecord>();
 
   async upsertUser(user: { id: string; login: string; now: string }): Promise<void> {
     const existing = this.users.get(user.id);
@@ -87,6 +89,7 @@ export class MemoryMetadataStore implements MetadataStore {
     this.users.delete(userId);
     this.credentials.delete(userId);
     this.installations.delete(userId);
+    for (const [id, row] of this.upstreams) if (row.userId === userId) this.upstreams.delete(id);
     for (const [id, session] of this.sessions) if (session.userId === userId) this.sessions.delete(id);
     for (const [id, receipt] of this.receipts) if (receipt.userId === userId) this.receipts.delete(id);
   }
@@ -125,6 +128,21 @@ export class MemoryMetadataStore implements MetadataStore {
 
   async deleteSessions(ids: string[]): Promise<void> {
     for (const id of ids) this.sessions.delete(id);
+  }
+
+  async listUpstreams(userId: string): Promise<UpstreamRecord[]> {
+    return [...this.upstreams.values()]
+      .filter((row) => row.userId === userId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map((row) => ({ ...row }));
+  }
+
+  async insertUpstream(row: UpstreamRecord): Promise<void> {
+    this.upstreams.set(`${row.userId}\0${row.name}`, { ...row });
+  }
+
+  async deleteUpstream(userId: string, name: string): Promise<boolean> {
+    return this.upstreams.delete(`${userId}\0${name}`);
   }
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/Cole-Z/life-diff"
 	"github.com/Cole-Z/life-diff/auth"
 	"github.com/Cole-Z/life-diff/googleprov"
+	"github.com/Cole-Z/life-diff/internal/proxy"
 	"github.com/Cole-Z/life-diff/mcpserver"
 )
 
@@ -60,6 +61,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opt Optio
 		return a.receipt(args[1:])
 	case "mcp":
 		return a.mcp(args[1:])
+	case "proxy":
+		return a.proxy(args[1:])
 	case "demo":
 		return a.demo(args[1:])
 	default:
@@ -68,14 +71,15 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opt Optio
 	}
 }
 
-const usage = `Life Diff shows what an AI agent changed in the accounts it can read.
-It reads those services itself. It does not trust the agent's claim that the work is done.
+const usage = `Life Diff writes one receipt of what an agent did.
+The proxy records tool calls. A connected service can also verify its own history.
 
 Usage:
+  lifediff proxy -- <command> [args]
+  lifediff receipt [id] [--html file]
   lifediff auth [--access minimal|full] [--credentials file] [--status]
   lifediff snapshot [--from time] [--to time] [--calendar id] [--tz name] [--only calendar,drive,gmail]
   lifediff diff [--snapshot id] [--claims file] [--html file] [--json file] [--strict]
-  lifediff receipt [id]
   lifediff mcp
   lifediff demo --html file [--json file]
   lifediff version
@@ -322,15 +326,76 @@ func (a *app) receipt(args []string) int {
 	}
 	store := lifediff.Store{Dir: home}
 	var receipt lifediff.Receipt
+	var recErr error
 	if fs.NArg() == 0 {
-		receipt, err = store.CurrentReceipt()
+		receipt, recErr = store.CurrentReceipt()
 	} else {
-		receipt, err = store.LoadReceipt(fs.Arg(0))
+		receipt, recErr = store.LoadReceipt(fs.Arg(0))
 	}
+	actionLog, logErr := proxy.Load(home)
+	if recErr != nil && (logErr != nil || len(actionLog.Entries) == 0) {
+		return a.fail(recErr)
+	}
+	code := 0
+	if recErr == nil {
+		code = a.finishReceipt(store, receipt, *htmlPath, "", false)
+	}
+	if logErr == nil && (fs.NArg() == 0 || recErr != nil) {
+		proxy.Print(a.stdout, actionLog, isTerminal(a.stdout))
+		page := proxy.RenderHTML(actionLog)
+		reportPath := strings.TrimSuffix(actionLog.Path, ".jsonl") + ".html"
+		if err := writePrivate(reportPath, page); err != nil {
+			return a.fail(err)
+		}
+		if *htmlPath != "" && recErr != nil {
+			if err := writePrivate(*htmlPath, page); err != nil {
+				return a.fail(err)
+			}
+		}
+		fmt.Fprintf(a.stdout, "Actions HTML  %s\n", reportPath)
+	}
+	return code
+}
+
+func (a *app) proxy(args []string) int {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(a.stderr, "Usage: lifediff proxy -- <command> [args]")
+		return 2
+	}
+	home, err := a.ensureHome()
 	if err != nil {
 		return a.fail(err)
 	}
-	return a.finishReceipt(store, receipt, *htmlPath, "", false)
+	now := time.Now()
+	if a.opt.Now != nil {
+		now = a.opt.Now()
+	}
+	logPath, err := proxy.Prepare(home, now)
+	if err != nil {
+		return a.fail(err)
+	}
+	err = proxy.Run(a.ctx, args, os.Stdin, a.stdout, a.stderr, proxy.Options{
+		LogPath: logPath,
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return a.fail(err)
+	}
+	return 0
+}
+
+func isTerminal(w io.Writer) bool {
+	file, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func (a *app) finishReceipt(store lifediff.Store, receipt lifediff.Receipt, htmlPath, jsonPath string, strict bool) int {

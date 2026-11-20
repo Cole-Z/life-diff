@@ -82,6 +82,27 @@ export interface Counts {
   unclaimedChanges: number;
 }
 
+export type ActionEffect = "read" | "write" | "unknown";
+export type ActionTone = "created" | "changed" | "removed" | "read" | "unknown";
+
+export interface RecordedAction {
+  id: string;
+  time: string;
+  upstream: string;
+  tool: string;
+  summary: string;
+  tone: ActionTone;
+  effect: ActionEffect;
+  verb?: string;
+  ok: boolean;
+  status: string;
+  result?: string;
+  error?: string;
+  durationMs?: number;
+  arguments?: unknown;
+  source: "proxy";
+}
+
 export interface Receipt {
   schemaVersion: "1.0.0";
   id: string;
@@ -99,4 +120,6 @@ export interface Receipt {
   claims: ClaimResult[];
   notes: string[];
   warnings?: string[];
+  /** Tool calls recorded by the proxy. Readers of schema 1.0.0 ignore unknown fields. */
+  actions?: RecordedAction[];
 }

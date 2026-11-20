@@ -30,15 +30,16 @@ export function renderConsentPage(view: ConsentView, handle: string): string {
 
 export function renderHome(): string {
   return layout("Life Diff", `<h1>Life Diff</h1>
-    <p>A read-only receipt of what changed on GitHub during an agent session.</p>
-    <p>Connect an MCP client to <code>/mcp</code>. Life Diff signs you in with a GitHub App, then an agent can snapshot a session and read the diff.</p>
-    <p>Google Calendar and Drive stay in the self-run Life Diff command. This hosted service does not use Google.</p>
-    <p><a href="/privacy">Privacy</a> · <a href="/account">Account</a></p>`);
+    <p>One receipt of everything your agent did, on any tool.</p>
+    <p>Add <code>https://lifediff.dev/mcp</code> to your agent. Register the other MCP servers it should use, and Life Diff forwards those calls and writes them on one receipt.</p>
+    <p>GitHub is a supporting check. When a session snapshotted GitHub, the receipt also shows what GitHub itself recorded.</p>
+    <p><a href="/settings">Upstreams</a> · <a href="/account">Account</a> · <a href="/privacy">Privacy</a></p>`);
 }
 
 export function renderPrivacy(): string {
   return layout("Privacy", `<h1>Privacy</h1>
     <p>Life Diff stores your GitHub login, an encrypted GitHub token, session snapshots, action logs, and receipts. It does not store file bodies and it does not write to GitHub.</p>
+    <p>If you register an upstream MCP server, Life Diff stores its URL and an encrypted token. Tool arguments are stored with token, secret, password, authorization, key, and cookie values removed. Life Diff only sees calls that the agent sends through Life Diff.</p>
     <p>Snapshots of an open session are kept for 7 days if you never end it. After a session ends, the snapshot is kept for 24 hours and the receipt for 90 days. Those are the defaults.</p>
     <p>Signed-in users can delete everything from the <a href="/account">account page</a>. An agent can call <code>DELETE /v1/me</code> with its Life Diff token.</p>
     <p>This is a draft for review. The full note is in PRIVACY.md.</p>`);
@@ -47,6 +48,7 @@ export function renderPrivacy(): string {
 export function renderAccount(login: string, csrf: string): string {
   return layout("Account", `<h1>Account</h1>
     <p>Signed in as <strong>${escapeHtml(login)}</strong>.</p>
+    <p><a href="/settings">Manage upstream MCP servers</a></p>
     <p>Deleting your data removes GitHub tokens, sessions, snapshots, receipts, and Life Diff access grants. It does not change anything on GitHub. Uninstall the GitHub App in GitHub settings as well.</p>
     <form method="post" action="/account/delete">
       <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
@@ -63,6 +65,40 @@ export function renderDeleted(): string {
 export function renderMcpBrowserPage(endpoint: string): string {
   return layout("Life Diff MCP", `<h1>This is the Life Diff MCP endpoint</h1>
     <p>Add <code>${escapeHtml(endpoint)}</code> as a remote MCP server in an MCP client.</p>`);
+}
+
+export interface SettingsUpstream {
+  name: string;
+  url: string;
+  hasToken: boolean;
+}
+
+export function renderSettings(login: string, csrf: string, upstreams: SettingsUpstream[], error?: string): string {
+  const rows = upstreams.length === 0
+    ? `<p>No upstreams yet. Add the MCP server your agent should call through Life Diff.</p>`
+    : upstreams.map((item) => `<li>
+        <strong>${escapeHtml(item.name)}</strong>
+        <div><code>${escapeHtml(item.url)}</code></div>
+        <div>${item.hasToken ? "Token saved" : "No token"}</div>
+        <form method="post" action="/settings/remove">
+          <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+          <input type="hidden" name="name" value="${escapeHtml(item.name)}">
+          <button>Remove</button>
+        </form>
+      </li>`).join("");
+  const message = error ? `<p>${escapeHtml(error)}</p>` : "";
+  return layout("Upstreams", `<h1>Upstream MCP servers</h1>
+    <p>Signed in as <strong>${escapeHtml(login)}</strong>. Tools from these servers appear as <code>name__tool</code>. Life Diff records each call. The token stays on Life Diff and is not shown again.</p>
+    ${message}
+    <ul>${rows}</ul>
+    <form method="post" action="/settings">
+      <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+      <label>Name <input name="name" required maxlength="33" autocomplete="off"></label>
+      <label>URL <input name="url" type="url" required placeholder="https://mcp.deepwiki.com/mcp"></label>
+      <label>Token, optional <input name="token" type="password" autocomplete="off"></label>
+      <button>Add upstream</button>
+    </form>
+    <p>After adding one, reconnect the agent if it still shows the old tool list.</p>`);
 }
 
 export function renderSignedOut(): string {

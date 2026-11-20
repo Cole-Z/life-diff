@@ -3,10 +3,13 @@ import { newId, addDays, addHours, validTimeZone } from "../text";
 import { GitHubClient } from "../github/client";
 import { readAfter, takeSnapshot } from "../github/snapshot";
 import type { GitHubApi, GitHubSnapshot } from "../github/types";
-import { buildReceipt, plainSummary } from "../receipt/build";
+import { buildActionReceipt, buildReceipt, plainSummary } from "../receipt/build";
 import { renderHtml } from "../receipt/html";
-import type { ClaimInput, Receipt } from "../receipt/types";
-import { SessionBook, type LoggedAction, type OpenSession } from "../session/book";
+import type { ClaimInput, ClaimResult, Receipt, RecordedAction } from "../receipt/types";
+import { SessionBook, type LoggedAction, type NewAction, type OpenSession } from "../session/book";
+import type { Classification } from "../proxy/classify";
+import { boundJson } from "../proxy/redact";
+import { recordedFrom } from "../receipt/actions";
 import type { MetadataStore, ObjectStore, ReceiptMeta } from "../storage/types";
 
 export class AppError extends Error {
@@ -19,16 +22,7 @@ export class AppError extends Error {
 export interface SessionPort {
   getOpen(): Promise<OpenSession | null>;
   start(session: OpenSession): Promise<OpenSession>;
-  log(sessionId: string, action: {
-    id: string;
-    loggedAt: string;
-    tool: string;
-    action?: string;
-    target: string;
-    detail?: string;
-    resource?: string;
-    repo?: string;
-  }): Promise<LoggedAction>;
+  log(sessionId: string, action: NewAction): Promise<LoggedAction>;
   list(sessionId: string): Promise<LoggedAction[]>;
   close(sessionId: string): Promise<void>;
 }
@@ -127,28 +121,59 @@ export interface EndResult {
 export async function endSession(deps: AppDeps, input: { sessionId?: string; claims?: ClaimInput[]; timeZone?: string }): Promise<EndResult> {
   const open = await deps.sessions.getOpen();
   if (!open || (input.sessionId && input.sessionId !== open.id)) throw new AppError("There is no open session to end.");
-  const raw = await deps.objects.get(open.snapshotKey);
-  if (!raw) throw new AppError("The snapshot for this session is missing.");
-  const before = JSON.parse(raw) as GitHubSnapshot;
   const checkedAt = deps.now.toISOString();
-  let after;
-  try {
-    after = await readAfter(deps.github, before, checkedAt);
-  } catch (error) {
-    throw new AppError(error instanceof Error ? error.message : "GitHub diff failed");
-  }
   const logged = await deps.sessions.list(open.id);
   const claims = combineClaims(logged, input.claims);
   const timeZone = input.timeZone && validTimeZone(input.timeZone) ? input.timeZone : open.timeZone;
   const receiptId = newId("rcpt", deps.now);
-  const receipt = buildReceipt({
-    receiptId,
-    before,
-    after,
-    checkedAt,
-    timeZone,
-    claims,
-  });
+  const actions = recordedActions(logged);
+  let receipt: Receipt;
+  if (!open.snapshotKey) {
+    receipt = buildActionReceipt({
+      receiptId,
+      startedAt: open.startedAt,
+      checkedAt,
+      timeZone,
+      actions,
+    });
+    if (claims && claims.length > 0) {
+      receipt.claimsChecked = true;
+      receipt.claims = claims.map((claim, index): ClaimResult => ({
+        id: claim.id ?? `claim_${index + 1}`,
+        target: claim.target,
+        status: "missing",
+        reason: "This session did not snapshot GitHub, so Life Diff could not verify this claim.",
+        ...(claim.service ? { service: claim.service } : {}),
+        ...(claim.action ? { action: claim.action } : {}),
+        ...(claim.detail ? { detail: claim.detail } : {}),
+        ...(claim.repo ? { repo: claim.repo } : {}),
+      }));
+      receipt.counts = { ...receipt.counts, missingClaims: receipt.claims.length };
+      receipt.notes.push("Claims were not compared with GitHub because this session has no snapshot.");
+    }
+  } else {
+    const raw = await deps.objects.get(open.snapshotKey);
+    if (!raw) throw new AppError("The snapshot for this session is missing.");
+    const before = JSON.parse(raw) as GitHubSnapshot;
+    let after;
+    try {
+      after = await readAfter(deps.github, before, checkedAt);
+    } catch (error) {
+      throw new AppError(error instanceof Error ? error.message : "GitHub diff failed");
+    }
+    receipt = buildReceipt({
+      receiptId,
+      before,
+      after,
+      checkedAt,
+      timeZone,
+      claims,
+    });
+    if (actions.length > 0) {
+      receipt.actions = actions;
+      receipt.notes.push("Tool calls routed through Life Diff are marked reported by the proxy. They are not proof the service changed.");
+    }
+  }
   const html = renderHtml(receipt);
   const jsonKey = `receipts/${deps.userId}/${receiptId}.json`;
   const htmlKey = `receipts/${deps.userId}/${receiptId}.html`;
@@ -177,6 +202,85 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
   });
   await deps.sessions.close(open.id);
   return { summary: plainSummary(receipt), receipt, html };
+}
+
+export async function ensureSession(deps: CoreDeps): Promise<OpenSession> {
+  const open = await deps.sessions.getOpen();
+  if (open) return open;
+  try {
+    return await startActionSession(deps);
+  } catch (error) {
+    const again = await deps.sessions.getOpen();
+    if (again) return again;
+    throw error;
+  }
+}
+
+async function startActionSession(deps: CoreDeps): Promise<OpenSession> {
+  const takenAt = deps.now.toISOString();
+  const sessionId = newId("ses", deps.now);
+  const session: OpenSession = {
+    id: sessionId,
+    startedAt: takenAt,
+    snapshotId: "none",
+    snapshotKey: "",
+    timeZone: deps.timeZone || "UTC",
+    repos: [],
+    warnings: [],
+  };
+  await deps.sessions.start(session);
+  await deps.meta.insertSession({
+    id: sessionId,
+    userId: deps.userId,
+    startedAt: takenAt,
+    status: "open",
+    snapshotId: "none",
+    snapshotKey: "",
+    snapshotExpiresAt: addDays(takenAt, deps.abandonedSessionDays),
+    timeZone: session.timeZone,
+    repoCount: 0,
+  });
+  return session;
+}
+
+export async function recordProxyCall(deps: CoreDeps, input: {
+  upstream: string;
+  tool: string;
+  args: unknown;
+  ok: boolean;
+  status: string;
+  summary: string;
+  classification: Classification;
+  durationMs: number;
+  result?: string;
+  error?: string;
+}): Promise<LoggedAction> {
+  const open = await ensureSession(deps);
+  return deps.sessions.log(open.id, {
+    id: newId("act", deps.now),
+    loggedAt: deps.now.toISOString(),
+    tool: input.tool.slice(0, 200),
+    target: input.summary.slice(0, 500),
+    source: "proxy",
+    upstream: input.upstream,
+    arguments: boundJson(input.args),
+    ok: input.ok,
+    status: input.status,
+    summary: input.summary,
+    effect: input.classification.effect,
+    tone: input.classification.tone,
+    durationMs: input.durationMs,
+    ...(input.classification.verb ? { verb: input.classification.verb } : {}),
+    ...(input.result ? { result: input.result.slice(0, 500) } : {}),
+    ...(input.error ? { error: input.error.slice(0, 500) } : {}),
+  });
+}
+
+function recordedActions(actions: LoggedAction[]): RecordedAction[] {
+  return actions.flatMap((action) => {
+    const recorded = recordedFrom(action);
+    return recorded ? [recorded] : [];
+  });
 }
 
 export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId?: string }): Promise<LoggedAction> {

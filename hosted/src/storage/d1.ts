@@ -6,6 +6,7 @@ import type {
   InstallationRow,
   MetadataStore,
   ObjectStore,
+  ReceiptLocated,
   ReceiptMeta,
   ReceiptRow,
   SessionRow,
@@ -99,12 +100,28 @@ export class D1MetadataStore implements MetadataStore {
     return rows.results.map(receiptMeta);
   }
 
+  async listReceiptsSince(userId: string, since: string, limit: number): Promise<ReceiptMeta[]> {
+    const rows = await this.db.prepare(
+      `SELECT id, session_id, created_at, expires_at, json_r2_key, html_r2_key, added, removed, modified, verified_claims, missing_claims, unclaimed_changes
+       FROM receipts WHERE user_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT ?`,
+    ).bind(userId, since, limit).all<ReceiptSql>();
+    return rows.results.map(receiptMeta);
+  }
+
   async getReceipt(userId: string, receiptId: string): Promise<ReceiptMeta | null> {
     const row = await this.db.prepare(
       `SELECT id, session_id, created_at, expires_at, json_r2_key, html_r2_key, added, removed, modified, verified_claims, missing_claims, unclaimed_changes
        FROM receipts WHERE user_id = ? AND id = ?`,
     ).bind(userId, receiptId).first<ReceiptSql>();
     return row ? receiptMeta(row) : null;
+  }
+
+  async findReceipt(receiptId: string): Promise<ReceiptLocated | null> {
+    const row = await this.db.prepare(
+      `SELECT id, user_id, session_id, created_at, expires_at, json_r2_key, html_r2_key, added, removed, modified, verified_claims, missing_claims, unclaimed_changes
+       FROM receipts WHERE id = ?`,
+    ).bind(receiptId).first<ReceiptSql & { user_id: string }>();
+    return row ? { ...receiptMeta(row), userId: row.user_id } : null;
   }
 
   async userObjectKeys(userId: string): Promise<string[]> {
@@ -116,7 +133,7 @@ export class D1MetadataStore implements MetadataStore {
     ).bind(userId).all<{ json_r2_key: string; html_r2_key: string }>();
     return [
       ...snapshots.results.map((row) => row.snapshot_r2_key),
-      ...receipts.results.flatMap((row) => [row.json_r2_key, row.html_r2_key]),
+      ...receipts.results.flatMap((row) => [row.json_r2_key, row.html_r2_key, row.json_r2_key.replace(/\.json$/, ".png")]),
     ];
   }
 
@@ -201,10 +218,20 @@ export class R2ObjectStore implements ObjectStore {
     await this.bucket.put(key, body, { httpMetadata: { contentType } });
   }
 
+  async putBytes(key: string, body: Uint8Array, contentType: string): Promise<void> {
+    await this.bucket.put(key, body, { httpMetadata: { contentType } });
+  }
+
   async get(key: string): Promise<string | null> {
     const object = await this.bucket.get(key);
     if (!object) return null;
     return object.text();
+  }
+
+  async getBytes(key: string): Promise<Uint8Array | null> {
+    const object = await this.bucket.get(key);
+    if (!object) return null;
+    return new Uint8Array(await object.arrayBuffer());
   }
 
   async delete(keys: string[]): Promise<void> {

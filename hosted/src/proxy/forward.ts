@@ -19,7 +19,7 @@ export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, t
     const durationMs = Date.now() - started;
     const failed = result.isError === true;
     const resultText = scrubSecrets(firstText(result), secrets);
-    const summary = plainAction(target.name, classification, pickSubject(boundJson(args)), !failed);
+    const summary = plainAction(target.name, classification, pickSubject(boundJson(args)), !failed, tool);
     await recordSafe(deps, {
       upstream: target.name,
       tool,
@@ -36,7 +36,7 @@ export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, t
   } catch (error) {
     const durationMs = Date.now() - started;
     const message = scrubSecrets(error instanceof UpstreamError || error instanceof Error ? error.message : "The upstream call failed.", secrets);
-    const summary = plainAction(target.name, classification, pickSubject(boundJson(args)), false);
+    const summary = plainAction(target.name, classification, pickSubject(boundJson(args)), false, tool);
     await recordSafe(deps, {
       upstream: target.name,
       tool,

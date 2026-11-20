@@ -6,6 +6,7 @@ import type {
   InstallationRow,
   MetadataStore,
   ObjectStore,
+  ReceiptLocated,
   ReceiptMeta,
   ReceiptRow,
   SessionRow,
@@ -74,13 +75,26 @@ export class MemoryMetadataStore implements MetadataStore {
     return toMeta(row);
   }
 
+  async findReceipt(receiptId: string): Promise<ReceiptLocated | null> {
+    const row = this.receipts.get(receiptId);
+    return row ? { ...toMeta(row), userId: row.userId } : null;
+  }
+
+  async listReceiptsSince(userId: string, since: string, limit: number): Promise<ReceiptMeta[]> {
+    return [...this.receipts.values()]
+      .filter((row) => row.userId === userId && row.createdAt >= since)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit)
+      .map(toMeta);
+  }
+
   async userObjectKeys(userId: string): Promise<string[]> {
     const keys: string[] = [];
     for (const session of this.sessions.values()) {
       if (session.userId === userId && session.snapshotKey) keys.push(session.snapshotKey);
     }
     for (const receipt of this.receipts.values()) {
-      if (receipt.userId === userId) keys.push(receipt.jsonKey, receipt.htmlKey);
+      if (receipt.userId === userId) keys.push(receipt.jsonKey, receipt.htmlKey, receipt.jsonKey.replace(/\.json$/, ".png"));
     }
     return keys;
   }
@@ -147,14 +161,24 @@ export class MemoryMetadataStore implements MetadataStore {
 }
 
 export class MemoryObjectStore implements ObjectStore {
-  objects = new Map<string, { body: string; contentType: string }>();
+  objects = new Map<string, { body: string; bytes?: Uint8Array; contentType: string }>();
 
   async put(key: string, body: string, contentType: string): Promise<void> {
     this.objects.set(key, { body, contentType });
   }
 
+  async putBytes(key: string, body: Uint8Array, contentType: string): Promise<void> {
+    this.objects.set(key, { body: "", bytes: body, contentType });
+  }
+
   async get(key: string): Promise<string | null> {
-    return this.objects.get(key)?.body ?? null;
+    const hit = this.objects.get(key);
+    if (!hit || hit.bytes) return null;
+    return hit.body;
+  }
+
+  async getBytes(key: string): Promise<Uint8Array | null> {
+    return this.objects.get(key)?.bytes ?? null;
   }
 
   async delete(keys: string[]): Promise<void> {

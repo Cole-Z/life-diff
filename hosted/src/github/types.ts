@@ -38,6 +38,12 @@ export interface RepoSnap {
   branches: BranchSnap[];
   pulls: PullSnap[];
   issues: IssueSnap[];
+  /** The corresponding list stopped early. Absence from it is not a removal. */
+  branchesTruncated?: boolean;
+  pullsTruncated?: boolean;
+  issuesTruncated?: boolean;
+  /** Issue list was filtered with `since`, so missing issues are not confirmed gone. */
+  issuesPartial?: boolean;
 }
 
 export interface GitHubSnapshot {

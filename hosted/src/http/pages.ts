@@ -33,7 +33,7 @@ export function renderHome(): string {
     <p>One receipt of everything your agent did, on any tool.</p>
     <p>Add <code>https://lifediff.dev/mcp</code> to your agent. Register the other MCP servers it should use, and Life Diff forwards those calls and writes them on one receipt.</p>
     <p>GitHub is a supporting check. When a session snapshotted GitHub, the receipt also shows what GitHub itself recorded.</p>
-    <p><a href="/settings">Upstreams</a> · <a href="/account">Account</a> · <a href="/privacy">Privacy</a></p>`);
+    <p><a href="/settings">Upstreams</a> · <a href="/roundup">Roundup</a> · <a href="/account">Account</a> · <a href="/privacy">Privacy</a></p>`);
 }
 
 export function renderPrivacy(): string {
@@ -99,6 +99,28 @@ export function renderSettings(login: string, csrf: string, upstreams: SettingsU
       <button>Add upstream</button>
     </form>
     <p>After adding one, reconnect the agent if it still shows the old tool list.</p>`);
+}
+
+export interface RoundupLineView {
+  service: string;
+  marker: string;
+  text: string;
+  color: string;
+}
+
+export function renderRoundup(login: string, since: string, lines: RoundupLineView[], imageUrl?: string, preview?: boolean): string {
+  const note = preview
+    ? `<p>This is the last 24 hours. It is not saved until an agent calls <code>get_roundup</code>.</p>`
+    : `<p>Signed in as <strong>${escapeHtml(login)}</strong>. Since ${escapeHtml(since)}.</p>`;
+  const image = imageUrl ? `<p><img src="${escapeHtml(imageUrl)}" alt="Life Diff roundup"></p>` : "";
+  const body = lines.length === 0
+    ? `<p>Nothing in this window.</p>`
+    : lines.map((line) => `<li style="color:${escapeHtml(line.color)}">${escapeHtml(line.marker)} ${escapeHtml(line.text)}</li>`).join("");
+  return layout("Roundup", `<h1>Roundup</h1>
+    ${note}
+    ${image}
+    <ul>${body}</ul>
+    <p>Green is added, amber is changed, red is deleted or sent, and gray is a read. Life Diff does not undo anything. The agent does, if you ask.</p>`);
 }
 
 export function renderSignedOut(): string {

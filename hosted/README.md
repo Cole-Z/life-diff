@@ -61,7 +61,8 @@ MCP tools, all of which require the scopes `receipts:read` and `sessions:write`:
 
 - `start_session` takes a GitHub snapshot. A second session is refused while one is open.
 - `end_session` writes the receipt. If the session snapshotted GitHub, it re-reads GitHub and diffs the window. Proxied tool calls are included either way.
-- `get_receipt` returns a stored receipt and a link to the receipt page. Pass `includeHtml` for the HTML report.
+- `get_receipt` returns a stored receipt, markdown to show verbatim, a receipt image, and a link to the receipt page. Pass `includeHtml` for the HTML report.
+- `get_roundup` merges recent sessions into one receipt in that same markdown and image. It does not run undos. The signed-in page is `/roundup`.
 - `log_action` records a claimed action. Life Diff does not run the tool.
 - `list_receipts` lists receipt metadata.
 - `add_upstream` registers an upstream MCP server (name, https URL, optional token or header). The token is encrypted and not returned.

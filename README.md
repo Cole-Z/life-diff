@@ -198,7 +198,7 @@ A bare array is also accepted. `action` may be `added`, `removed`, `modified`, o
 
 ## MCP server
 
-The hosted server is `https://lifediff.dev/mcp`. Its tools are `start_session`, `end_session`, `get_receipt`, `log_action`, `list_receipts`, `add_upstream`, `list_upstreams`, and `remove_upstream`, plus one namespaced tool for each tool on a registered upstream. `get_receipt` returns a link to the receipt page.
+The hosted server is `https://lifediff.dev/mcp`. Its tools are `start_session`, `end_session`, `get_receipt`, `get_roundup`, `log_action`, `list_receipts`, `add_upstream`, `list_upstreams`, and `remove_upstream`, plus one namespaced tool for each tool on a registered upstream. `end_session` and `get_receipt` return markdown and a receipt image to show verbatim. A session from the last 30 minutes is reused. An older open session is closed into a receipt first. `get_roundup` merges recent sessions. The page is [lifediff.dev/roundup](https://lifediff.dev/roundup).
 
 `lifediff mcp` is the local stdio server for the Google snapshot. Run `lifediff auth` once first. The tools are `snapshot`, `diff`, and `get_receipt`. Logs stay off stdout so they do not break the protocol. `lifediff proxy -- <command>` is the local pass-through described above.
 

@@ -231,7 +231,7 @@ func (b *bridge) entry(call pendingCall, rpcErr *struct {
 		}
 	}
 	args := redactRaw(call.args)
-	summary := plainAction(b.opt.Upstream, class, subject(args), ok)
+	summary := plainAction(b.opt.Upstream, class, subject(args), ok, call.tool)
 	status := "ok"
 	errText := ""
 	if !ok {
@@ -334,7 +334,7 @@ func classifyTool(name string) classification {
 	if verb := firstToken(tokens, "update", "move", "write", "post", "edit", "patch", "set"); verb != "" {
 		return classification{effect: "write", tone: "changed", verb: verb}
 	}
-	if verb := firstToken(tokens, "get", "list", "search", "read", "fetch", "query"); verb != "" {
+	if verb := firstToken(tokens, "get", "list", "search", "read", "fetch", "query", "ask", "describe", "lookup", "check"); verb != "" {
 		return classification{effect: "read", tone: "read", verb: verb}
 	}
 	return classification{effect: "unknown", tone: "unknown"}
@@ -351,7 +351,7 @@ func firstToken(tokens []string, words ...string) string {
 	return ""
 }
 
-func plainAction(service string, class classification, subject string, ok bool) string {
+func plainAction(service string, class classification, subject string, ok bool, tool string) string {
 	label := serviceLabel(service)
 	if !ok {
 		if subject != "" {
@@ -382,15 +382,33 @@ func plainAction(service string, class classification, subject string, ok bool) 
 		}
 		return fmt.Sprintf("Deleted something in %s.", label)
 	case "read":
+		if class.verb == "ask" {
+			if subject != "" {
+				return fmt.Sprintf("Asked %s: “%s”.", label, subject)
+			}
+			return fmt.Sprintf("Asked %s.", label)
+		}
+		if tool != "" {
+			if subject != "" {
+				return fmt.Sprintf("Read %s from %s: “%s”.", tool, label, subject)
+			}
+			return fmt.Sprintf("Read %s from %s.", tool, label)
+		}
 		if subject != "" {
 			return fmt.Sprintf("Looked up “%s” in %s.", subject, label)
 		}
 		return fmt.Sprintf("Looked something up in %s.", label)
 	default:
-		if subject != "" {
-			return fmt.Sprintf("Used %s with “%s”.", label, subject)
+		if tool != "" && subject != "" {
+			return fmt.Sprintf("Called %s on %s: “%s”.", tool, label, subject)
 		}
-		return fmt.Sprintf("Used %s.", label)
+		if tool != "" {
+			return fmt.Sprintf("Called %s on %s.", tool, label)
+		}
+		if subject != "" {
+			return fmt.Sprintf("Called a tool on %s: “%s”.", label, subject)
+		}
+		return fmt.Sprintf("Called a tool on %s.", label)
 	}
 }
 

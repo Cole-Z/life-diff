@@ -81,7 +81,8 @@ describe("session flow", () => {
     };
     const started = await startSession(deps, {});
     expect(started.repos).toEqual(["acme/app"]);
-    await expect(startSession(deps, {})).rejects.toThrow(/already open/);
+    const again = await startSession(deps, {});
+    expect(again.sessionId).toBe(started.sessionId);
     const logged = await logAction({ ...deps, now: new Date("2026-04-02T15:05:00.000Z") }, {
       tool: "github.create_file",
       action: "created",
@@ -108,6 +109,33 @@ describe("session flow", () => {
     expect(meta.receipts.size).toBe(0);
     expect(book.getOpen()).toBeNull();
     for (const key of keys) expect(objects.objects.has(key)).toBe(false);
+  });
+
+  it("closes a session that has been open for 30 minutes and starts another", async () => {
+    const book = new SessionBook();
+    const meta = new MemoryMetadataStore();
+    const objects = new MemoryObjectStore();
+    const deps = {
+      userId: "42",
+      login: "octocat",
+      now,
+      timeZone: "UTC",
+      maxRepos: 25,
+      receiptRetentionDays: 90,
+      snapshotRetentionHours: 24,
+      abandonedSessionDays: 7,
+      github: fakeApi(),
+      sessions: sessionPortFromBook(book),
+      meta,
+      objects,
+    };
+    const first = await startSession(deps, {});
+    const recent = await startSession({ ...deps, now: new Date("2026-04-02T15:29:00.000Z") }, {});
+    expect(recent.sessionId).toBe(first.sessionId);
+    const next = await startSession({ ...deps, now: new Date("2026-04-02T15:30:00.000Z") }, {});
+    expect(next.sessionId).not.toBe(first.sessionId);
+    expect(meta.receipts.size).toBe(1);
+    expect(book.getOpen()?.id).toBe(next.sessionId);
   });
 });
 

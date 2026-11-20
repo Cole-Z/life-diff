@@ -2,10 +2,14 @@ import { coreDeps } from "../app/runtime";
 import { AppError, getReceipt, logAction } from "../app/service";
 import { eraseUser, oauthServer } from "../auth/worker";
 import type { Env } from "../env";
+import { receiptCardKey } from "../receipt/card";
+import { D1MetadataStore, R2ObjectStore } from "../storage/d1";
 import { browserSession } from "./session";
 
 export async function handleData(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  const cardMatch = url.pathname.match(/^\/receipts\/([^/]+)\/card\.png$/);
+  if (request.method === "GET" && cardMatch?.[1]) return serveReceiptCard(env, decodeURIComponent(cardMatch[1]), url.searchParams.get("t") ?? "");
   const auth = await requireUser(request, env, url);
   if (auth instanceof Response) return auth;
   try {
@@ -63,4 +67,22 @@ async function requireUser(request: Request, env: Env, url: URL): Promise<{ user
 
 function stringField(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+async function serveReceiptCard(env: Env, id: string, token: string): Promise<Response> {
+  if (!/^[a-f0-9]{32}$/.test(token)) return new Response("Not found", { status: 404 });
+  const located = await new D1MetadataStore(env.DB).findReceipt(id);
+  if (!located) return new Response("Not found", { status: 404 });
+  const objects = new R2ObjectStore(env.RECEIPTS);
+  const json = await objects.get(located.jsonKey);
+  let cardToken = "";
+  try {
+    cardToken = json ? ((JSON.parse(json) as { cardToken?: string }).cardToken ?? "") : "";
+  } catch {
+    cardToken = "";
+  }
+  if (cardToken !== token) return new Response("Not found", { status: 404 });
+  const png = await objects.getBytes(receiptCardKey(located.jsonKey));
+  if (!png) return new Response("Not found", { status: 404 });
+  return new Response(png, { headers: { "content-type": "image/png", "cache-control": "private, max-age=300" } });
 }

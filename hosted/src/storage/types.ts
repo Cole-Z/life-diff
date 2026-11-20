@@ -52,6 +52,10 @@ export interface ReceiptMeta {
   unclaimedChanges: number;
 }
 
+export interface ReceiptLocated extends ReceiptMeta {
+  userId: string;
+}
+
 export interface InstallationRow {
   installationId: number;
   accountLogin: string;
@@ -92,7 +96,9 @@ export interface MetadataStore {
   closeSession(input: { id: string; endedAt: string; receiptId: string; snapshotExpiresAt: string }): Promise<void>;
   insertReceipt(row: ReceiptRow): Promise<void>;
   listReceipts(userId: string, limit: number): Promise<ReceiptMeta[]>;
+  listReceiptsSince(userId: string, since: string, limit: number): Promise<ReceiptMeta[]>;
   getReceipt(userId: string, receiptId: string): Promise<ReceiptMeta | null>;
+  findReceipt(receiptId: string): Promise<ReceiptLocated | null>;
   userObjectKeys(userId: string): Promise<string[]>;
   deleteUserRows(userId: string): Promise<void>;
   expiredReceipts(nowIso: string, limit: number): Promise<ExpiredReceipt[]>;
@@ -108,6 +114,8 @@ export interface MetadataStore {
 
 export interface ObjectStore {
   put(key: string, body: string, contentType: string): Promise<void>;
+  putBytes(key: string, body: Uint8Array, contentType: string): Promise<void>;
   get(key: string): Promise<string | null>;
+  getBytes(key: string): Promise<Uint8Array | null>;
   delete(keys: string[]): Promise<void>;
 }

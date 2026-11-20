@@ -6,6 +6,30 @@ This service does not use Google. Calendar and Drive stay in the self-run comman
 
 Nothing in this repository deploys the Worker or creates the GitHub App. The steps below are for Cole to run when he is ready.
 
+## First deploy checklist
+
+`wrangler.toml` already has the production KV id, the D1 database id, `workers_dev = false`, and the active `lifediff.dev` route. `GITHUB_APP_SLUG` is `life-diff`. `GITHUB_APP_CLIENT_ID` is still the placeholder until it is filled in on this branch. Do not commit secret values.
+
+1. Enable R2 in the Cloudflare dashboard, then create the R2 bucket `life-diff-receipts`.
+2. From `hosted/`, set the three Worker secrets:
+
+```bash
+npx wrangler secret put GITHUB_APP_CLIENT_SECRET
+npx wrangler secret put TOKEN_ENCRYPTION_KEY
+npx wrangler secret put COOKIE_SIGNING_KEY
+```
+
+3. Apply the remote D1 migrations, then deploy:
+
+```bash
+npx wrangler d1 migrations apply life-diff --remote
+npx wrangler deploy
+```
+
+4. Add `https://lifediff.dev/mcp` as a remote MCP server.
+
+The GitHub App also needed a private key generated so GitHub would allow the install. The Worker never uses that key.
+
 ## Domain
 
 Use one origin, `https://lifediff.dev`, instead of a separate `mcp.lifediff.dev`.
@@ -20,7 +44,7 @@ Use one origin, `https://lifediff.dev`, instead of a separate `mcp.lifediff.dev`
 
 One origin keeps the GitHub callback, the consent cookie, the account page, and the MCP resource on the same host. The MCP resource URL has to be exactly `https://lifediff.dev/mcp`.
 
-The custom domain route is commented out in `wrangler.toml`. `workers_dev` stays `true` until that route is uncommented. Do not attach the domain from CI.
+The custom domain route is active in `wrangler.toml`, and `workers_dev` is `false`. Do not change the route from CI.
 
 Local development overrides the issuer and resource URL in `.dev.vars` (see `.dev.vars.example`):
 
@@ -85,7 +109,7 @@ The snapshot reads at most 25 repositories. A truncated branch, pull, or issue p
 
 ## Create the GitHub App
 
-In GitHub, create a GitHub App (user-to-server). Do not generate or download a private key. Leave the webhook inactive.
+In GitHub, create a GitHub App (user-to-server). GitHub requires a private key before the app can be installed. Generate one for that install step. The Worker never reads the key, so do not put it in `wrangler.toml` or in a Worker secret. Leave the webhook inactive.
 
 - Homepage URL: `https://lifediff.dev`
 - Callback URL: `https://lifediff.dev/callback`
@@ -101,7 +125,7 @@ Repository permissions, all read-only:
 
 No administration, no write permissions, and no account permissions beyond what GitHub requires to identify the authorizing user.
 
-After the app exists, copy the client ID into `GITHUB_APP_CLIENT_ID` and the slug into `GITHUB_APP_SLUG` in `wrangler.toml` (or as a var). Put the client secret only in a secret:
+After the app exists, copy the client ID into `GITHUB_APP_CLIENT_ID` in `wrangler.toml`. The slug is already `life-diff`. Put the client secret only in a secret:
 
 ```bash
 cd hosted
@@ -116,17 +140,7 @@ For local `wrangler dev`, put the same names in `hosted/.dev.vars` and point a s
 
 ## Create the Cloudflare resources
 
-Run these once, then replace the placeholder ids in `wrangler.toml`. They are not run by CI.
-
-```bash
-cd hosted
-npx wrangler kv namespace create OAUTH_KV
-npx wrangler d1 create life-diff
-npx wrangler r2 bucket create life-diff-receipts
-npx wrangler d1 migrations apply life-diff --remote
-```
-
-When the `lifediff.dev` zone is on this account and you want production traffic on it, uncomment the `[[routes]]` block in `wrangler.toml` and set `workers_dev = false`. Then deploy with `npx wrangler deploy`. This pull request does not do that.
+The KV namespace id and the D1 database id are already in `wrangler.toml`. R2, the three secrets, the remote migration, and deploy are in the first deploy checklist above. None of those commands are run by CI, and this pull request does not deploy.
 
 An MCP client should use `https://lifediff.dev/mcp` as the server URL. Life Diff's authorization server is `https://lifediff.dev`.
 

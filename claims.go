@@ -55,14 +55,11 @@ type normalizedClaim struct {
 func normalizeClaim(c ClaimInput) (normalizedClaim, error) {
 	out := normalizedClaim{raw: c, anyKind: true}
 	if s := strings.TrimSpace(c.Service); s != "" {
-		switch fold(s) {
-		case "calendar", "gcal", "google calendar", "google-calendar":
-			out.service = ServiceCalendar
-		case "drive", "gdrive", "google drive", "google-drive":
-			out.service = ServiceDrive
-		default:
-			return out, fmt.Errorf("unknown service %q (use calendar or drive)", c.Service)
+		svc, err := canonicalService(s)
+		if err != nil {
+			return out, err
 		}
+		out.service = svc
 	}
 	if a := strings.TrimSpace(c.Action); a != "" {
 		kind, err := normalizeAction(a)
@@ -219,9 +216,26 @@ func phraseIn(hay, needle string) bool {
 func verifiedReason(ch Change) string {
 	reason := fmt.Sprintf("This matches a %s change to %s.", ch.Service.Display(), quoteName(ch.ResourceName))
 	if ch.Confidence == ConfidenceLow {
-		reason += " Google dates that change before the snapshot, so this check is less sure the agent did it."
+		reason += " The service dates that change before the snapshot, so this check is less sure the agent did it."
 	}
 	return reason
+}
+
+func canonicalService(s string) (Service, error) {
+	switch fold(s) {
+	case "calendar", "gcal", "google calendar", "google-calendar":
+		return ServiceCalendar, nil
+	case "drive", "gdrive", "google drive", "google-drive":
+		return ServiceDrive, nil
+	case "gmail", "google mail", "google-mail":
+		return ServiceGmail, nil
+	default:
+		id := strings.TrimSpace(fold(s))
+		if validProviderID(id) {
+			return Service(id), nil
+		}
+		return "", fmt.Errorf("unknown service %q", s)
+	}
 }
 
 func missingReason(service Service) string {
@@ -230,9 +244,11 @@ func missingReason(service Service) string {
 		return "No matching change showed up in Calendar."
 	case ServiceDrive:
 		return "No matching change showed up in Drive."
+	case ServiceGmail:
+		return "No matching change showed up in Gmail."
 	case "":
-		return "No matching change showed up in Calendar or Drive."
+		return "No matching change showed up."
 	default:
-		panic(fmt.Sprintf("lifediff: unhandled service %q", service))
+		return fmt.Sprintf("No matching change showed up in %s.", service.Display())
 	}
 }

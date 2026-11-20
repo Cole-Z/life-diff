@@ -1,0 +1,46 @@
+version: 2
+
+project_name: lifediff
+
+builds:
+  - id: lifediff
+    main: ./cmd/lifediff
+    binary: lifediff
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/Cole-Z/life-diff.Version={{ .Version }}
+
+archives:
+  - id: lifediff
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - src: skills/life-diff/SKILL.md
+        dst: skills/life-diff/SKILL.md
+      - src: README.md
+      - src: LICENSE
+      - src: install.sh
+      - src: docs/providers.md
+        dst: docs/providers.md
+      - src: docs/action-log.md
+        dst: docs/action-log.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  disable: true

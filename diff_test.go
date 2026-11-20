@@ -63,7 +63,7 @@ func TestSampleClaimVerdicts(t *testing.T) {
 		t.Fatalf("old draft %+v", old)
 	}
 	vac, ok := findChange(r, "file_vac")
-	if !ok || !strings.Contains(vac.Summary, `Renamed "Vacation ideas" to "Vacation ideas (final)".`) || !strings.Contains(vac.Summary, `Updated the contents of "Vacation ideas (final)".`) {
+	if !ok || !strings.Contains(vac.Summary, `Renamed "Vacation ideas" to "Vacation ideas (final)".`) || !strings.Contains(vac.Summary, `removed "Launch TBD" and added "Launch in May"`) {
 		t.Fatal(vac.Summary)
 	}
 	pickup, ok := findChange(r, "evt_pickup")
@@ -267,8 +267,12 @@ func TestParseClaims(t *testing.T) {
 	if _, err := ParseClaims([]byte(`[{"target":""}]`)); err == nil {
 		t.Fatal("expected target error")
 	}
-	if _, err := ParseClaims([]byte(`[{"service":"mail","target":"x"}]`)); err == nil {
+	if _, err := ParseClaims([]byte(`[{"service":"not a service","target":"x"}]`)); err == nil {
 		t.Fatal("expected service error")
+	}
+	claims, err = ParseClaims([]byte(`[{"service":"gmail","target":"Hello"},{"service":"slack","target":"standup"}]`))
+	if err != nil || len(claims) != 2 {
+		t.Fatal(err, claims)
 	}
 }
 
@@ -327,7 +331,7 @@ func TestReceiptJSONHasNoSecrets(t *testing.T) {
 			t.Fatal(needle)
 		}
 	}
-	if !strings.Contains(s, `"schemaVersion": "1.0.0"`) || !strings.Contains(s, `"readOnly": true`) {
+	if !strings.Contains(s, `"schemaVersion": "1.1.0"`) || !strings.Contains(s, `"readOnly": true`) {
 		t.Fatal(s[:400])
 	}
 }

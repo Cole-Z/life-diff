@@ -74,11 +74,21 @@ func reportView(r Receipt) viewData {
 		Warnings:   r.Warnings,
 		Empty:      len(r.Changes) == 0,
 	}
-	if r.Calendar != nil {
-		v.Services = append(v.Services, viewSectionFor(ServiceCalendar, r, calendarIntro(r, loc)))
-	}
-	if r.Drive != nil {
-		v.Services = append(v.Services, viewSectionFor(ServiceDrive, r, driveIntro(r)))
+	if len(r.Providers) > 0 {
+		for _, p := range r.Providers {
+			name := p.DisplayName
+			if name == "" {
+				name = Service(p.ID).Display()
+			}
+			v.Services = append(v.Services, viewSectionNamed(name, p.Intro, Service(p.ID), r))
+		}
+	} else {
+		if r.Calendar != nil {
+			v.Services = append(v.Services, viewSectionFor(ServiceCalendar, r, calendarIntro(r, loc)))
+		}
+		if r.Drive != nil {
+			v.Services = append(v.Services, viewSectionFor(ServiceDrive, r, driveIntro(r)))
+		}
 	}
 	for _, c := range r.Claims {
 		item := viewClaim{
@@ -94,7 +104,11 @@ func reportView(r Receipt) viewData {
 }
 
 func viewSectionFor(service Service, r Receipt, intro string) viewSection {
-	sec := viewSection{Name: service.Display(), Intro: intro}
+	return viewSectionNamed(service.Display(), intro, service, r)
+}
+
+func viewSectionNamed(name, intro string, service Service, r Receipt) viewSection {
+	sec := viewSection{Name: name, Intro: intro}
 	for _, ch := range r.Changes {
 		if ch.Service != service {
 			continue

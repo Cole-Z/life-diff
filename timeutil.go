@@ -12,8 +12,8 @@ const (
 	mediumGrace = 15 * time.Minute
 )
 
-// ConfidenceAt rates a Google timestamp against the session window.
-// A zero timestamp is medium: the change was observed, but Google did not date it.
+// ConfidenceAt rates a service timestamp against the session window.
+// A zero timestamp is medium: the change was observed, but the service did not date it.
 func ConfidenceAt(occurred, sessionStart, sessionEnd time.Time) Confidence {
 	if occurred.IsZero() {
 		return ConfidenceMedium
@@ -33,11 +33,11 @@ func ConfidenceAt(occurred, sessionStart, sessionEnd time.Time) Confidence {
 func confidenceReason(level Confidence) string {
 	switch level {
 	case ConfidenceHigh:
-		return "Google saved this during the session, between the snapshot and this check."
+		return "The service recorded this during the session, between the snapshot and this check."
 	case ConfidenceMedium:
 		return "The timing is unclear or only close to the session, so this check is partly sure."
 	case ConfidenceLow:
-		return "Google dates this before the snapshot, so it may not have been done in this session."
+		return "The service dates this before the snapshot, so it may not have been done in this session."
 	default:
 		panic(fmt.Sprintf("lifediff: unhandled confidence %q", level))
 	}

@@ -1,8 +1,9 @@
-// Package googleprov reads Google Calendar and Drive with the least-privilege
-// scopes. It only issues HTTP GET requests.
+// Package googleprov reads Google Calendar, Drive, and Gmail.
+// It does not create, edit, delete, or send anything.
 package googleprov
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -50,7 +51,36 @@ type apiError struct {
 	} `json:"error"`
 }
 
+type httpStatusError struct {
+	Status int
+	Path   string
+	Detail string
+}
+
+func (e *httpStatusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Detail
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, q url.Values, dest any) error {
+	return c.doJSON(ctx, http.MethodGet, path, q, nil, dest)
+}
+
+func (c *Client) postJSON(ctx context.Context, path string, payload any, dest any) error {
+	var body []byte
+	if payload != nil {
+		var err error
+		body, err = json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+	}
+	return c.doJSON(ctx, http.MethodPost, path, nil, body, dest)
+}
+
+func (c *Client) doJSON(ctx context.Context, method, path string, q url.Values, payload []byte, dest any) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -58,12 +88,19 @@ func (c *Client) getJSON(ctx context.Context, path string, q url.Values, dest an
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	var rdr io.Reader
+	if payload != nil {
+		rdr = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, rdr)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "lifediff/"+lifediff.Version)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("google request failed: %s", auth.Redact(err.Error()))
@@ -84,7 +121,11 @@ func (c *Client) getJSON(ctx context.Context, path string, q url.Values, dest an
 		if msg == "" {
 			msg = resp.Status
 		}
-		return fmt.Errorf("google %s: %s", path, auth.Redact(msg))
+		return &httpStatusError{
+			Status: resp.StatusCode,
+			Path:   path,
+			Detail: fmt.Sprintf("google %s: %s", path, auth.Redact(msg)),
+		}
 	}
 	if dest == nil || len(body) == 0 {
 		return nil
@@ -93,6 +134,54 @@ func (c *Client) getJSON(ctx context.Context, path string, q url.Values, dest an
 		return fmt.Errorf("decode google %s: %s", path, auth.Redact(err.Error()))
 	}
 	return nil
+}
+
+// getBytes reads a text response, such as a Drive export or alt=media download.
+// limit is the most bytes kept. truncated is true when the response was longer.
+func (c *Client) getBytes(ctx context.Context, path string, q url.Values, limit int) ([]byte, bool, error) {
+	if ctx.Err() != nil {
+		return nil, false, ctx.Err()
+	}
+	if limit <= 0 {
+		limit = lifediff.MaxDriveTextBytes
+	}
+	u := c.base() + path
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	req.Header.Set("User-Agent", "lifediff/"+lifediff.Version)
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("google request failed: %s", auth.Redact(err.Error()))
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
+	if err != nil {
+		return nil, false, fmt.Errorf("read google response: %s", auth.Redact(err.Error()))
+	}
+	truncated := len(body) > limit
+	if truncated {
+		body = body[:limit]
+	}
+	if resp.StatusCode == http.StatusGone {
+		return nil, false, lifediff.ErrSyncTokenExpired
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := googleMessage(body)
+		if msg == "" {
+			msg = resp.Status
+		}
+		return nil, false, &httpStatusError{
+			Status: resp.StatusCode,
+			Path:   path,
+			Detail: fmt.Sprintf("google %s: %s", path, auth.Redact(msg)),
+		}
+	}
+	return body, truncated, nil
 }
 
 func googleMessage(body []byte) string {

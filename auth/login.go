@@ -25,6 +25,9 @@ type LoginOptions struct {
 	Exchange    func(ctx context.Context, cfg *oauth2.Config, code string) (*oauth2.Token, error)
 	Timeout     time.Duration
 	Out         io.Writer
+	// ScopeNote is the sentence printed above the sign-in link.
+	// An empty note keeps the Calendar and Drive wording.
+	ScopeNote string
 }
 
 // Login runs the desktop loopback OAuth flow and returns a token.
@@ -65,7 +68,11 @@ func Login(ctx context.Context, cfg *oauth2.Config, opt LoginOptions) (*oauth2.T
 	authURL := cfg.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
 	if opt.Out != nil {
 		fmt.Fprintf(opt.Out, "Waiting for Google to redirect to %s\n", cfg.RedirectURL)
-		fmt.Fprintf(opt.Out, "Open this link to allow read-only access to Calendar and Drive:\n\n%s\n\n", authURL)
+		note := opt.ScopeNote
+		if note == "" {
+			note = "Open this link to allow read-only access to Calendar and Drive:"
+		}
+		fmt.Fprintf(opt.Out, "%s\n\n%s\n\n", note, authURL)
 	}
 
 	type result struct {

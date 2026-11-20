@@ -19,3 +19,11 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+      - name: Install script
+        run: sh -n install.sh
+      - name: Goreleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check

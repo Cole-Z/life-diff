@@ -1,8 +1,8 @@
-# Life Diff receipt schema 1.0.0
+# Life Diff receipt schema 1.1.0
 
-A receipt is the JSON document written by `lifediff diff`. It is the normalized list of what changed between a snapshot and a later read of Google Calendar and Google Drive, plus an optional check of what an agent claimed.
+A receipt is the JSON document written by `lifediff diff`. It is the normalized list of what changed between a snapshot and a later read of each provider, plus an optional check of what an agent claimed.
 
-`schemaVersion` is `1.0.0`. Patch and minor versions may add fields. Readers must ignore fields they do not know. A different major version is not this document.
+`schemaVersion` is `1.1.0`. Version 1.1.0 adds `providers`, one section per service that was compared. `calendar` and `drive` are still present for those two services. Patch and minor versions may add fields. Readers must ignore fields they do not know. A snapshot or receipt with `schemaVersion` `1.0.0` still loads. A different major version is not this document.
 
 The sample file [`sample-receipt.json`](sample-receipt.json) is a full document produced from fixture data. The HTML form of that same receipt is [`sample-report.html`](sample-report.html).
 
@@ -10,15 +10,16 @@ The sample file [`sample-receipt.json`](sample-receipt.json) is a full document 
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `schemaVersion` | string | `1.0.0` for this document. |
+| `schemaVersion` | string | `1.1.0` for this document. |
 | `id` | string | Receipt id, for example `rcpt_sample`. |
 | `generatedAt` | string | RFC3339 time the receipt was built. |
-| `readOnly` | bool | Always `true`. Life Diff did not write to Google. |
+| `readOnly` | bool | Always `true`. Life Diff did not write to the connected accounts. |
 | `producer` | object | `name` and `version` of the program that wrote the file. |
 | `snapshot` | object | `id` and `takenAt` of the before-image. |
 | `comparedAt` | string | RFC3339 time of the later read. Same instant as `generatedAt` for a receipt written by `diff`. |
 | `timeZone` | string | IANA zone used to render times in `summary` and in the HTML report. Instants in this file stay in UTC. |
 | `session` | object | `startedAt` (snapshot) and `checkedAt` (this comparison). Confidence uses this window. |
+| `providers` | array | One object per service that was compared, in provider order. See below. Added in 1.1.0. |
 | `calendar` | object | Present when Calendar was compared. See below. |
 | `drive` | object | Present when Drive was compared. See below. |
 | `counts` | object | `added`, `removed`, `modified`, `verifiedClaims`, `missingClaims`, `unclaimedChanges`. |
@@ -29,6 +30,17 @@ The sample file [`sample-receipt.json`](sample-receipt.json) is a full document 
 | `warnings` | array | Present when a comparison was partial, for example a sync token expired. |
 
 `counts.verifiedClaims`, `counts.missingClaims`, and `counts.unclaimedChanges` are meaningful when `claimsChecked` is `true`. They are `0` otherwise.
+
+### `providers`
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Provider id, such as `calendar`, `drive`, or `gmail`. |
+| `displayName` | Word shown in the report, such as `Calendar`. |
+| `diffMode` | How that provider compared, when it has one. Calendar uses `sync` or `window`. Drive uses `changes` or `list`. Gmail uses `history` or `list`. |
+| `intro` | One sentence the report prints under the service name. |
+
+A new provider adds an object here. It does not add a new top-level field.
 
 ### `calendar`
 
@@ -53,7 +65,7 @@ The sample file [`sample-receipt.json`](sample-receipt.json) is a full document 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `id` | string | Stable id derived from the service, resource id, and kind. |
-| `service` | string | `calendar` or `drive`. |
+| `service` | string | Provider id. Built-in ids are `calendar`, `drive`, and `gmail`. Any other provider id is allowed. |
 | `kind` | string | `added`, `removed`, or `modified`. |
 | `resourceId` | string | Google event id or file id. |
 | `resourceName` | string | Title or file name shown to a person. |
@@ -81,7 +93,7 @@ The sample file [`sample-receipt.json`](sample-receipt.json) is a full document 
 | Field | Meaning |
 | --- | --- |
 | `id` | Caller-supplied id, or `claim-1`, `claim-2`, ... |
-| `service` | `calendar` or `drive` when the claim named one. |
+| `service` | The provider id the claim named, when it named one. |
 | `action` | Normalized `added`, `removed`, or `modified` when the claim named one. |
 | `target` | The name or id the agent gave. |
 | `detail` | Optional text from the agent. |
@@ -108,12 +120,14 @@ Compare `occurredAt` with the session window:
 
 - **high**: the time falls in the window, allowing two minutes of clock skew
 - **medium**: the time is within 15 minutes before the snapshot, the time is missing, or the time is after the check by more than the skew
-- **low**: Google dates the change earlier than that
+- **low**: the service dates the change earlier than that
 
 Low confidence still means the before and after values differ. It means the edit may be older than this agent session.
 
 ## What this schema does not contain
 
 - OAuth tokens, client secrets, or authorization codes
-- Drive file bodies
-- A promise that an unclaimed change was made by a particular agent. The receipt shows what Google's data says changed, and how the timing relates to the session.
+- Gmail message bodies. A Gmail change may include the subject, recipients, labels, and snippet.
+- A promise that an unclaimed change was made by a particular agent. The receipt shows what the connected services report, and how the timing relates to the session.
+
+Full-mode Drive changes may include a `text` field: the exported text of a Doc, Sheet, or Slides file, or the contents of a plain text file. That text is also stored in the local snapshot (`texts` on the Drive provider state), which is written with mode `0600`. Binary files are not stored.

@@ -1,8 +1,8 @@
 # Life Diff
 
-Life Diff shows what an AI agent changed in your Google accounts. It reads Calendar and Drive itself, compares that with a snapshot taken before the agent ran, and writes a receipt. The receipt is the record. The agent's "done" is only a claim.
+Life Diff shows what an AI agent changed in your accounts. It reads each connected service itself, compares that with a snapshot taken before the agent ran, and writes a receipt. The receipt is the record. The agent's "done" is only a claim.
 
-This version is read-only, self-hosted, and covers one session of **Google Calendar** and **Google Drive**. It does not download file bodies, and it does not create, edit, or delete anything in Google.
+This version is read-only and self-hosted. **Google Calendar** and **Google Drive** are the first providers. `lifediff auth --access full` also reads Drive activity, exports Google Docs, Sheets, and Slides as text, downloads plain text files, and reads **Gmail** subject, recipients, labels, and snippet. It does not create, edit, delete, or send anything, and it does not request Gmail message bodies.
 
 ![Sample receipt](docs/sample-report.png)
 
@@ -14,11 +14,23 @@ The picture above is the sample report rendered from fixture data, not from a li
 - A plain-language sentence, such as `Moved "Dentist" from Tue, Apr 7, 3:00 PM to Wed, Apr 8, 10:00 AM.`
 - Field-level before and after values.
 - Optional claim checking: each claim is **verified** or **missing**, and each real change the agent did not mention is **not claimed**.
-- A confidence level from the session window. High means Google dates the change between the snapshot and the check. Low means Google dates it earlier, so it may be an older edit.
+- A confidence level from the session window. High means the service dates the change between the snapshot and the check. Low means the service dates it earlier, so it may be an older edit.
 
-Calendar and Drive do not keep the history this needs, so Life Diff stores the snapshot on your computer. A Calendar sync token and the Drive Changes API are used when Google provides them. If a token expires, Life Diff reads the calendar window or the file list again and says so on the receipt.
+The services do not keep the history this needs, so Life Diff stores the snapshot on your computer. A Calendar sync token, the Drive Changes API, and (with full access) Gmail history are used when Google provides them. If a cursor expires, Life Diff reads the window or the list again and says so on the receipt.
+
+A new service is a provider. It implements one interface and is registered on the engine. Calendar, Drive, and Gmail do not have to be edited to add Slack, Notion, Linear, GitHub, or Microsoft 365. See [docs/providers.md](docs/providers.md).
 
 ## Install
+
+After a release tag such as `v0.2.0` is published, this installs the binary and the agent skill without Go:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Cole-Z/life-diff/main/install.sh | sh
+```
+
+The binary goes to `~/.local/bin/lifediff`. The skill goes to `~/.cursor/skills/life-diff/SKILL.md`. Put `~/.local/bin` on your `PATH`.
+
+To build from source instead:
 
 ```bash
 git clone https://github.com/Cole-Z/life-diff.git
@@ -26,21 +38,19 @@ cd life-diff
 go build -o lifediff ./cmd/lifediff
 ```
 
-Go 1.26 or newer. The core is the importable package `github.com/Cole-Z/life-diff` (Go package name `lifediff`). A hosted product can call `Engine` with its own `CalendarReader` and `DriveReader`.
+Go 1.26 or newer. The core is the importable package `github.com/Cole-Z/life-diff` (Go package name `lifediff`). A hosted product can call `Engine` with its own `Provider` list.
 
 ## Create a Google OAuth client
 
-You use your own desktop OAuth client. For personal use, with the app in **Testing** and your account listed as a test user, Google does not require app verification.
+You use your own desktop OAuth client. Leave the app in **Testing** and add your account as a test user. Google does not require verification for that client, because you are the only user and the client is not published. That is the only reason the scopes below work without a verification review. A client shared with other people, or moved to production, would have to go through Google's review. `drive.readonly`, `drive.activity.readonly`, and `gmail.readonly` are restricted scopes. Do not share the client file.
 
 1. Open [Google Cloud Console](https://console.cloud.google.com/) and create a project, for example `Life Diff`.
-2. **APIs & Services → Library**. Enable **Google Calendar API** and **Google Drive API**.
+2. **APIs & Services → Library**. Enable **Google Calendar API** and **Google Drive API**. For full access, also enable **Google Drive Activity API** and **Gmail API**.
 3. **APIs & Services → OAuth consent screen**.
    - User type: **External** (or Internal, if this is a Workspace org you administer).
    - App name: `Life Diff`.
    - Add your Google account under **Test users**.
-   - Add the scopes below. Life Diff requests only these:
-     - `https://www.googleapis.com/auth/calendar.readonly`
-     - `https://www.googleapis.com/auth/drive.metadata.readonly`
+   - Add the scopes for the access level you will use. Names are from [Google's OAuth scope list](https://developers.google.com/identity/protocols/oauth2/scopes).
    - Leave the publishing status as **Testing**.
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID**.
    - Application type: **Desktop app**.
@@ -53,9 +63,27 @@ You use your own desktop OAuth client. For personal use, with the app in **Testi
    install -m 600 ~/Downloads/client_secret_*.json ~/.lifediff/credentials.json
    ```
 
-   Or set `LIFEDIFF_CREDENTIALS` to the file path. Do not commit this file. The repo ignores `credentials.json` and `token.json`.
+   Or set `LIFEDIFF_CREDENTIALS` to the file path. Do not commit this file. The repo ignores `credentials.json`, `token.json`, and `access.json`.
 
-`drive.metadata.readonly` can see names, folders, trash state, size, checksum, and version. It cannot see the words inside a Doc. A content edit shows up as a new version.
+### Scopes
+
+Default, `lifediff auth` (minimal):
+
+| Scope | What Google calls it | What Life Diff does with it |
+| --- | --- | --- |
+| `https://www.googleapis.com/auth/calendar.readonly` | See and download any calendar you can access using your Calendar | Reads events. Does not edit them. |
+| `https://www.googleapis.com/auth/drive.metadata.readonly` | View metadata for files in your Drive | Reads names, folders, trash, size, checksum, and version. A content edit shows up as a new version. The words inside a Doc are not read. |
+
+Full, `lifediff auth --access full`. These replace the minimal Drive scope. They are still read-only:
+
+| Scope | What Google calls it | What Life Diff does with it |
+| --- | --- | --- |
+| `https://www.googleapis.com/auth/calendar.readonly` | See and download any calendar you can access using your Calendar | Same as minimal. |
+| `https://www.googleapis.com/auth/drive.readonly` | View and download all your Drive files | Exports Docs and Slides as text, Sheets as CSV, and downloads plain text files so the receipt can quote what changed. Images and other binaries stay metadata. Nothing is uploaded. |
+| `https://www.googleapis.com/auth/drive.activity.readonly` | View the activity record of files in your Drive | Uses the activity time and verb (edited, renamed, and so on) on the receipt. |
+| `https://www.googleapis.com/auth/gmail.readonly` | View your email messages and settings | Lists mail sent, drafted, deleted, archived, or relabeled, with subject, recipients, and the short snippet. Calls use `format=metadata` only. `format=full` and `format=raw` are not requested, so the message body is not downloaded. |
+
+`drive.readonly` can download any file. Full mode uses that only for text: Docs, Sheets, Slides, and plain text files, capped per file. `gmail.readonly` can read message bodies. Full mode does not ask for them. Switching from minimal to full means running `lifediff auth --access full` again so Google grants the new scopes.
 
 While the app stays in Testing, Google expires refresh tokens after seven days. Run `lifediff auth` again when a command says the sign-in needs to be refreshed.
 
@@ -63,9 +91,10 @@ While the app stays in Testing, Google expires refresh tokens after seven days. 
 
 ```bash
 ./lifediff auth
+./lifediff auth --access full
 ```
 
-Life Diff listens on `127.0.0.1` and prints a link. Open it, choose the test user, and allow read-only access. The token is saved at `~/.lifediff/token.json` with mode `0600`. The command prints the path, not the token.
+Life Diff listens on `127.0.0.1` and prints a link. Open it, choose the test user, and allow the read-only scopes. The token is saved at `~/.lifediff/token.json` with mode `0600`. The access level is saved at `~/.lifediff/access.json`, also mode `0600`. The command prints the path and the scope list, not the token.
 
 ```bash
 ./lifediff auth --status
@@ -81,7 +110,7 @@ If Google reports `redirect_uri_mismatch`, the desktop client needs the loopback
 ./lifediff diff --claims claims.json
 ```
 
-`snapshot` stores Calendar events from 24 hours ago through 90 days ahead, plus Drive file metadata (`trashed = false`, up to 2000 files, newest changes first). Narrow it with `--from`, `--to`, `--calendar`, `--tz`, `--only calendar`, `--drive-query`, and `--max-files`.
+`snapshot` stores Calendar events from 24 hours ago through 90 days ahead, plus Drive file metadata (`trashed = false`, up to 2000 files, newest changes first). With full access it also stores text for the newest 40 Docs, Sheets, Slides, and plain text files, and Gmail subject, recipients, labels, and snippet for the newest 100 messages from the last 30 days, plus the mailbox history id. Those files stay on this computer, mode `0600`. Narrow the snapshot with `--from`, `--to`, `--calendar`, `--tz`, `--only calendar,drive,gmail`, `--drive-query`, and `--max-files`. `--only all` is the default.
 
 `diff` writes:
 
@@ -103,12 +132,13 @@ Both are mode `0600`. `--json` and `--html` copy them somewhere else, also mode 
 {
   "claims": [
     {"service": "calendar", "action": "modified", "target": "Dentist", "detail": "Moved to Wednesday at 10:00 AM"},
-    {"service": "drive", "action": "created", "target": "Q2 goals"}
+    {"service": "drive", "action": "created", "target": "Q2 goals"},
+    {"service": "gmail", "action": "added", "target": "Hello"}
   ]
 }
 ```
 
-A bare array is also accepted. `action` may be `added`, `removed`, `modified`, or everyday synonyms such as `moved`, `renamed`, `created`, and `deleted`. Omit `--claims` and Life Diff only lists the changes; it does not mark them unclaimed.
+A bare array is also accepted. `action` may be `added`, `removed`, `modified`, or everyday synonyms such as `moved`, `renamed`, `created`, and `deleted`. `service` is a provider id (`calendar`, `drive`, `gmail`, or a later provider). Omit `--claims` and Life Diff only lists the changes; it does not mark them unclaimed.
 
 ## MCP server
 
@@ -125,7 +155,9 @@ A bare array is also accepted. `action` may be `added`, `removed`, `modified`, o
 }
 ```
 
-An agent skill that tells the agent when to snapshot and how to read the receipt is in [skills/life-diff/SKILL.md](skills/life-diff/SKILL.md).
+An agent skill that tells the agent when to snapshot, how to install without Go, and how to present the receipt is in [skills/life-diff/SKILL.md](skills/life-diff/SKILL.md).
+
+A design for `lifediff mcp-proxy`, a pass-through that would log agent tool calls onto the receipt as claimed actions, is in [docs/action-log.md](docs/action-log.md). That command is not built yet.
 
 ## Where data lives
 
@@ -133,14 +165,15 @@ An agent skill that tells the agent when to snapshot and how to read the receipt
 | --- | --- |
 | `~/.lifediff/credentials.json` | Your OAuth client file. You create it. |
 | `~/.lifediff/token.json` | Saved sign-in. Mode `0600`. |
+| `~/.lifediff/access.json` | `minimal` or `full`, and the scope list. Mode `0600`. |
 | `~/.lifediff/snapshots/` | Before-images, including event titles and file names. Mode `0600`. |
 | `~/.lifediff/receipts/` | JSON receipts and HTML reports. Mode `0600`. |
 
-Override the directory with `LIFEDIFF_HOME`. Life Diff creates it as mode `0700`. Nothing is sent anywhere except to Google's own APIs, and those calls are GET requests with the two read-only scopes.
+Override the directory with `LIFEDIFF_HOME`. Life Diff creates it as mode `0700`. Nothing is sent anywhere except to Google's own APIs. Minimal access uses GET with the two read-only scopes. Full access also exports Drive text, POSTs a Drive Activity query (a filter, not a file body), and reads Gmail headers and snippets.
 
 ## Library
 
-`Engine.TakeSnapshot` and `Engine.Compare` depend on the `CalendarReader` and `DriveReader` interfaces, not on the desktop OAuth flow. `BuildReceipt` is pure: it turns a snapshot and a later read into a receipt. The CLI, the local token store, and the MCP server are wrappers around that.
+`Engine.TakeSnapshot` and `Engine.Compare` depend on the `Provider` interface, not on the desktop OAuth flow. Calendar and Drive adapt `CalendarReader` and `DriveReader`. Gmail implements `Provider` directly. `BuildReceipt` does not touch the network: it turns a snapshot and a later read into a receipt. The CLI, the local token store, and the MCP server are wrappers around that. [docs/providers.md](docs/providers.md) is the guide for a new service.
 
 ## Development
 
@@ -149,7 +182,9 @@ go vet ./...
 go test ./...
 ```
 
-Tests use fake Calendar and Drive JSON under `googleprov/testdata`. They do not call Google. GitHub Actions runs `go vet` and `go test` on push and pull request.
+Tests use fake Calendar, Drive, and Gmail responses. They do not call Google. GitHub Actions runs `go vet` and `go test` on push and pull request.
+
+A tag named `v*` builds release binaries with GoReleaser: macOS arm64 and amd64, Linux arm64 and amd64, and Windows arm64 and amd64. The archive includes this README and `skills/life-diff/SKILL.md`. `install.sh` downloads that archive.
 
 To regenerate the checked-in sample report:
 

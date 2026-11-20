@@ -23,7 +23,7 @@ Register the other MCP servers the agent should use. On [lifediff.dev/settings](
 - name: `deepwiki`
 - url: `https://mcp.deepwiki.com/mcp`
 
-Reconnect the agent after adding an upstream. Clients often cache `tools/list`. Life Diff also sends `notifications/tools/list_changed` when the client can receive it. The new tools are named `deepwiki__read_wiki_structure`, `deepwiki__ask_question`, and so on: the upstream name, two underscores, then the tool name.
+Reconnect the agent after adding an upstream. Clients often cache `tools/list`. Life Diff also sends `notifications/tools/list_changed` when the client can receive it. The new tools are named `deepwiki__read_wiki_structure`, `deepwiki__read_wiki_contents`, and `deepwiki__ask_wiki_question`: the upstream name, two underscores, then the tool name.
 
 Let the agent call two or three of those tools. The first forwarded call opens a session if you did not call `start_session`. Then call `end_session` and `get_receipt`. Open the link in the reply. Writes are listed first. Reads are collapsed.
 

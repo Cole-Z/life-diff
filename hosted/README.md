@@ -59,11 +59,23 @@ MCP_SERVER_URL=http://localhost:8787/mcp
 
 MCP tools, all of which require the scopes `receipts:read` and `sessions:write`:
 
-- `start_session` takes a snapshot. A second snapshot is refused while a session is open.
-- `end_session` re-reads GitHub, diffs the window, and stores a receipt.
-- `get_receipt` returns a stored receipt. Pass `includeHtml` for the HTML report.
+- `start_session` takes a GitHub snapshot. A second session is refused while one is open.
+- `end_session` writes the receipt. If the session snapshotted GitHub, it re-reads GitHub and diffs the window. Proxied tool calls are included either way.
+- `get_receipt` returns a stored receipt and a link to the receipt page. Pass `includeHtml` for the HTML report.
 - `log_action` records a claimed action. Life Diff does not run the tool.
 - `list_receipts` lists receipt metadata.
+- `add_upstream` registers an upstream MCP server (name, https URL, optional token or header). The token is encrypted and not returned.
+- `list_upstreams` lists name, URL, and whether a token is stored.
+- `remove_upstream` removes one by name.
+
+The same `/mcp` endpoint then exposes each upstream tool as `<name>__<tool>` and records every forwarded call. Signed-in browsers manage the same list at `/settings`. After adding an upstream, reconnect the MCP client if it cached the tool list.
+
+A new D1 migration, `0002_upstreams.sql`, creates the `upstreams` table. Apply it with the same command as the first migration, from `hosted/`:
+
+```bash
+npx wrangler d1 migrations apply life-diff --remote
+npx wrangler deploy
+```
 
 The same action log is available as `POST /v1/sessions/:id/actions` with the Life Diff bearer token. `DELETE /v1/me` deletes the account. Signed-in browsers can use `POST /account/delete` (the account page includes a CSRF token).
 
@@ -73,7 +85,7 @@ The same action log is available as `POST /v1/sessions/:id/actions` with the Lif
 
 Receipts use schema `1.0.0`, the same top-level shape as the Go core (`docs/receipt-schema.md` on the core PR). Readers ignore unknown fields. Hosted receipts add a top-level `github` object, parallel to `calendar` and `drive`, and changes may include `resourceType`, `repo`, `actor`, `viaApp`, and `labelsChanged`. File `content` is a line count such as `+10 −2`, not a patch or file body.
 
-The HTML report uses the same labels and colors as the core report: Added `#0f5c32`, Removed `#8d1c1c`, Modified `#6b4300`, and the same badge, icon, and confidence language. The lede says the receipt is a read-only record of GitHub changes. Links are limited to `https://github.com`.
+The HTML report uses the same labels and colors as the core report: Added `#0f5c32`, Removed `#8d1c1c`, Modified `#6b4300`, and gray for read-only proxy calls. Proxied tool calls are grouped by service, writes first, reads collapsed, and labeled reported by proxy. GitHub changes are labeled verified from service history. Links on GitHub rows are limited to `https://github.com`. A signed-in browser can open `/receipts/<id>` with the session cookie set at GitHub sign-in.
 
 ## How a session is stored
 

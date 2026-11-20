@@ -1,8 +1,64 @@
 # Life Diff
 
-Life Diff shows what an AI agent changed in your accounts. It reads each connected service itself, compares that with a snapshot taken before the agent ran, and writes a receipt. The receipt is the record. The agent's "done" is only a claim.
+One receipt of everything your agent did, on any tool.
 
-This version is read-only and self-hosted. **Google Calendar** and **Google Drive** are the first providers. `lifediff auth --access full` also reads Drive activity, exports Google Docs, Sheets, and Slides as text, downloads plain text files, and reads **Gmail** subject, recipients, labels, and snippet. It does not create, edit, delete, or send anything, and it does not request Gmail message bodies.
+Life Diff sits on the path between the agent and the tools. Each tool call that goes through it is recorded: when it happened, which service, what was asked, whether it worked, how long it took, and whether it looks like a read or a change. The receipt is one page. Green is something added, amber is something changed, red is something deleted or sent, and gray is a read. A person who does not write code can read the one-line summary. Details are there if you want them.
+
+GitHub is a supporting check. When a session snapshotted GitHub, the receipt also shows what GitHub itself recorded, labeled **verified from service history**. Lines Life Diff recorded by forwarding a tool are labeled **reported by proxy**. A proxied line is not proof the service changed. A verified line exists only where that service exposes history.
+
+Life Diff only sees calls that are routed through it. A tool the agent calls some other way is absent. The proxy does not block, rewrite, or retry a call.
+
+## Quickstart
+
+### Add it to an agent by URL
+
+In Claude, Cursor, or another MCP client, add a remote MCP server:
+
+`https://lifediff.dev/mcp`
+
+Sign in with GitHub when the client asks. Life Diff keeps the GitHub token. The client receives a Life Diff token.
+
+Register the other MCP servers the agent should use. On [lifediff.dev/settings](https://lifediff.dev/settings), add a name, an https URL, and a token if that server requires one. Or tell the agent to call `add_upstream`. A public server that needs no token:
+
+- name: `deepwiki`
+- url: `https://mcp.deepwiki.com/mcp`
+
+Reconnect the agent after adding an upstream. Clients often cache `tools/list`. Life Diff also sends `notifications/tools/list_changed` when the client can receive it. The new tools are named `deepwiki__read_wiki_structure`, `deepwiki__read_wiki_contents`, and `deepwiki__ask_wiki_question`: the upstream name, two underscores, then the tool name.
+
+Let the agent call two or three of those tools. The first forwarded call opens a session if you did not call `start_session`. Then call `end_session` and `get_receipt`. Open the link in the reply. Writes are listed first. Reads are collapsed.
+
+Call `start_session` before the other work if you want the GitHub check in the same receipt. A session the proxy opened by itself has no GitHub snapshot. End that session before `start_session` if you want both.
+
+`list_upstreams` and `remove_upstream` manage the same list. Tokens are encrypted with the existing key and are never returned or written to a log.
+
+### On this computer
+
+`lifediff proxy` wraps one local stdio MCP server. It copies JSON-RPC through unchanged and appends each `tools/call` to `~/.lifediff/actions/<session>.jsonl` (mode `0600`).
+
+Claude Desktop or Cursor:
+
+```json
+{
+  "mcpServers": {
+    "wrapped": {
+      "command": "/absolute/path/to/lifediff",
+      "args": ["proxy", "--", "npx", "-y", "some-mcp-server"]
+    }
+  }
+}
+```
+
+Then:
+
+```bash
+lifediff receipt
+```
+
+The terminal uses the same colors. The HTML page is written next to the log. Green is added, amber is changed, red is deleted or sent, gray is read-only, and each line says reported by proxy.
+
+## Self-run Google receipt
+
+The command can also read **Google Calendar** and **Google Drive** itself, compare that with a snapshot taken before the agent ran, and write a receipt. `lifediff auth --access full` also reads Drive activity, exports Google Docs, Sheets, and Slides as text, downloads plain text files, and reads **Gmail** subject, recipients, labels, and snippet. It does not create, edit, delete, or send anything, and it does not request Gmail message bodies.
 
 ![Sample receipt](docs/sample-report.png)
 
@@ -142,7 +198,9 @@ A bare array is also accepted. `action` may be `added`, `removed`, `modified`, o
 
 ## MCP server
 
-`lifediff mcp` speaks MCP over stdin and stdout, using the official Go SDK (`github.com/modelcontextprotocol/go-sdk`). Run `lifediff auth` once first. The tools are `snapshot`, `diff`, and `get_receipt`. Logs stay off stdout so they do not break the protocol.
+The hosted server is `https://lifediff.dev/mcp`. Its tools are `start_session`, `end_session`, `get_receipt`, `log_action`, `list_receipts`, `add_upstream`, `list_upstreams`, and `remove_upstream`, plus one namespaced tool for each tool on a registered upstream. `get_receipt` returns a link to the receipt page.
+
+`lifediff mcp` is the local stdio server for the Google snapshot. Run `lifediff auth` once first. The tools are `snapshot`, `diff`, and `get_receipt`. Logs stay off stdout so they do not break the protocol. `lifediff proxy -- <command>` is the local pass-through described above.
 
 ```json
 {
@@ -157,7 +215,7 @@ A bare array is also accepted. `action` may be `added`, `removed`, `modified`, o
 
 An agent skill that tells the agent when to snapshot, how to install without Go, and how to present the receipt is in [skills/life-diff/SKILL.md](skills/life-diff/SKILL.md).
 
-A design for `lifediff mcp-proxy`, a pass-through that would log agent tool calls onto the receipt as claimed actions, is in [docs/action-log.md](docs/action-log.md). That command is not built yet.
+What the proxy records, and what it does not claim, is in [docs/action-log.md](docs/action-log.md).
 
 ## Where data lives
 
@@ -168,6 +226,7 @@ A design for `lifediff mcp-proxy`, a pass-through that would log agent tool call
 | `~/.lifediff/access.json` | `minimal` or `full`, and the scope list. Mode `0600`. |
 | `~/.lifediff/snapshots/` | Before-images, including event titles and file names. Mode `0600`. |
 | `~/.lifediff/receipts/` | JSON receipts and HTML reports. Mode `0600`. |
+| `~/.lifediff/actions/` | JSONL action logs from `lifediff proxy`, and their HTML pages. Mode `0600`. |
 
 Override the directory with `LIFEDIFF_HOME`. Life Diff creates it as mode `0700`. Nothing is sent anywhere except to Google's own APIs. Minimal access uses GET with the two read-only scopes. Full access also exports Drive text, POSTs a Drive Activity query (a filter, not a file body), and reads Gmail headers and snippets.
 

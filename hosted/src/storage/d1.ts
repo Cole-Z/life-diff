@@ -9,6 +9,7 @@ import type {
   ReceiptMeta,
   ReceiptRow,
   SessionRow,
+  UpstreamRecord,
 } from "./types";
 
 interface SqlStatement {
@@ -124,6 +125,7 @@ export class D1MetadataStore implements MetadataStore {
     await this.db.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
     await this.db.prepare(`DELETE FROM installations WHERE user_id = ?`).bind(userId).run();
     await this.db.prepare(`DELETE FROM github_credentials WHERE user_id = ?`).bind(userId).run();
+    await this.db.prepare(`DELETE FROM upstreams WHERE user_id = ?`).bind(userId).run();
     await this.db.prepare(`DELETE FROM users WHERE id = ?`).bind(userId).run();
   }
 
@@ -168,6 +170,28 @@ export class D1MetadataStore implements MetadataStore {
   async deleteSessions(ids: string[]): Promise<void> {
     for (const id of ids) await this.db.prepare(`DELETE FROM sessions WHERE id = ?`).bind(id).run();
   }
+
+  async listUpstreams(userId: string): Promise<UpstreamRecord[]> {
+    const rows = await this.db.prepare(
+      `SELECT id, user_id, name, url, auth_enc, created_at FROM upstreams WHERE user_id = ? ORDER BY created_at ASC`,
+    ).bind(userId).all<UpstreamSql>();
+    return rows.results.map(upstreamRecord);
+  }
+
+  async insertUpstream(row: UpstreamRecord): Promise<void> {
+    await this.db.prepare(
+      `INSERT INTO upstreams (id, user_id, name, url, auth_enc, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(row.id, row.userId, row.name, row.url, row.authEnc ?? null, row.createdAt).run();
+  }
+
+  async deleteUpstream(userId: string, name: string): Promise<boolean> {
+    const existing = await this.db.prepare(
+      `SELECT id FROM upstreams WHERE user_id = ? AND name = ?`,
+    ).bind(userId, name).first<{ id: string }>();
+    if (!existing) return false;
+    await this.db.prepare(`DELETE FROM upstreams WHERE user_id = ? AND name = ?`).bind(userId, name).run();
+    return true;
+  }
 }
 
 export class R2ObjectStore implements ObjectStore {
@@ -211,6 +235,26 @@ interface ReceiptSql {
   verified_claims: number;
   missing_claims: number;
   unclaimed_changes: number;
+}
+
+interface UpstreamSql {
+  id: string;
+  user_id: string;
+  name: string;
+  url: string;
+  auth_enc: string | null;
+  created_at: string;
+}
+
+function upstreamRecord(row: UpstreamSql): UpstreamRecord {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    url: row.url,
+    createdAt: row.created_at,
+    ...(row.auth_enc ? { authEnc: row.auth_enc } : {}),
+  };
 }
 
 function receiptMeta(row: ReceiptSql): ReceiptMeta {

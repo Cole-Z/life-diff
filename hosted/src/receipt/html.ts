@@ -1,5 +1,5 @@
 import { assertNever, escapeHtml, formatInstant } from "../text";
-import type { Change, ClaimResult, FieldChange, Receipt } from "./types";
+import type { ActionTone, Change, ClaimResult, FieldChange, Receipt, RecordedAction } from "./types";
 
 const ICON_ADDED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7 1h2v14H7zM1 7h14v2H1z"/></svg>`;
 const ICON_REMOVED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 7h14v2H1z"/></svg>`;
@@ -35,6 +35,8 @@ export function renderHtml(receipt: Receipt): string {
     --modified-bg: #fff6e4;
     --neutral: #3f3a33;
     --neutral-bg: #efeae1;
+    --read: #5c564c;
+    --read-bg: #efeae1;
     --focus: #1e3a32;
   }
   @media (prefers-color-scheme: dark) {
@@ -54,6 +56,8 @@ export function renderHtml(receipt: Receipt): string {
       --modified-bg: #3a2c14;
       --neutral: #f4efe6;
       --neutral-bg: #2a251f;
+      --read: #c2b8a8;
+      --read-bg: #2a251f;
       --focus: #f0cb86;
     }
   }
@@ -85,6 +89,7 @@ export function renderHtml(receipt: Receipt): string {
   .badge-added { background: var(--added-bg); color: var(--added); }
   .badge-removed { background: var(--removed-bg); color: var(--removed); }
   .badge-modified { background: var(--modified-bg); color: var(--modified); }
+  .badge-read, .badge-unknown { background: var(--read-bg); color: var(--read); }
   .tag { background: var(--neutral-bg); color: var(--neutral); font-weight: 600; }
   section { margin-top: 28px; }
   h2 { font-family: Georgia, Palatino, serif; font-size: 26px; margin: 0 0 4px; }
@@ -100,6 +105,16 @@ export function renderHtml(receipt: Receipt): string {
   article.is-added { border-left-color: var(--added); }
   article.is-removed { border-left-color: var(--removed); }
   article.is-modified { border-left-color: var(--modified); }
+  article.is-read, article.is-unknown { border-left-color: var(--read); }
+  details.reads, details.more { margin: 12px 0; }
+  details.more pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--neutral-bg);
+    border-radius: 8px;
+    padding: 8px;
+    font-size: 13px;
+  }
   .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
   h3 { font-family: Georgia, Palatino, serif; font-size: 20px; line-height: 1.35; font-weight: 600; margin: 0 0 10px; }
   .fields { display: grid; gap: 8px; margin: 0 0 8px; }
@@ -130,7 +145,7 @@ export function renderHtml(receipt: Receipt): string {
 <header class="mast">
   <div class="wrap">
     <p class="word">Life Diff</p>
-    <p class="lede">A read-only receipt of what changed on GitHub during this session.</p>
+    <p class="lede">One receipt of what your agent did. Tool calls are reported by the proxy. GitHub changes are verified from service history.</p>
     <p class="session">${session}</p>
     <p class="headline">${escapeHtml(headline)}</p>
     <div class="legend" aria-label="Legend">
@@ -141,9 +156,10 @@ export function renderHtml(receipt: Receipt): string {
   </div>
 </header>
 <main>
+  ${renderActions(receipt)}
   <section>
     <h2>GitHub</h2>
-    <p class="intro">Repositories compared with the snapshot: ${escapeHtml(repos)}.</p>
+    <p class="intro">Verified from service history. Repositories compared with the snapshot: ${escapeHtml(repos)}.</p>
     ${receipt.changes.length === 0 ? `<p class="empty">Nothing changed in the repositories Life Diff could read.</p>` : receipt.changes.map(renderChange).join("")}
   </section>
   ${renderClaims(receipt)}
@@ -168,6 +184,7 @@ function renderChange(change: Change): string {
   return `<article class="change is-${change.kind}">
       <div class="meta">
         <span class="badge badge-${change.kind}">${iconFor(change.kind)}${escapeHtml(kindLabel(change.kind))}</span>
+        <span class="tag">Verified from service history</span>
         <span class="tag">${escapeHtml(confidenceLabel(change.confidence))}</span>
         ${claim}${actor}${via}
       </div>
@@ -185,6 +202,93 @@ function renderField(field: FieldChange, kind: Change["kind"]): string {
   const value = kind === "removed" ? field.before || field.after : field.after || field.before;
   if (!value.trim()) return "";
   return `<div class="field"><div class="label">${escapeHtml(field.label)}</div><div><span class="value">${escapeHtml(value)}</span></div></div>`;
+}
+
+function renderActions(receipt: Receipt): string {
+  const actions = receipt.actions ?? [];
+  if (actions.length === 0) return "";
+  const groups = new Map<string, RecordedAction[]>();
+  for (const action of actions) {
+    const list = groups.get(action.upstream) ?? [];
+    list.push(action);
+    groups.set(action.upstream, list);
+  }
+  const ordered = [...groups.entries()].sort((a, b) => {
+    const aw = a[1].some((action) => action.effect !== "read") ? 0 : 1;
+    const bw = b[1].some((action) => action.effect !== "read") ? 0 : 1;
+    return aw - bw || a[0].localeCompare(b[0]);
+  });
+  return ordered.map(([upstream, group]) => renderActionGroup(upstream, group)).join("");
+}
+
+function renderActionGroup(upstream: string, actions: RecordedAction[]): string {
+  const writes = actions.filter((action) => action.effect !== "read");
+  const reads = actions.filter((action) => action.effect === "read");
+  const readsBlock = reads.length === 0
+    ? ""
+    : `<details class="reads"><summary>${reads.length} read-only</summary>${reads.map(renderAction).join("")}</details>`;
+  return `<section>
+    <h2>${escapeHtml(upstream)}</h2>
+    <p class="intro">Reported by proxy. These are tool calls Life Diff forwarded, not a verified history of the service.</p>
+    ${writes.length === 0 ? `<p class="empty">No changes recorded.</p>` : writes.map(renderAction).join("")}
+    ${readsBlock}
+  </section>`;
+}
+
+function renderAction(action: RecordedAction): string {
+  const tone = toneClass(action.tone);
+  const failed = action.ok ? "" : `<span class="tag">Failed</span>`;
+  const details = {
+    tool: action.tool,
+    status: action.status,
+    ...(typeof action.durationMs === "number" ? { durationMs: action.durationMs } : {}),
+    ...(action.arguments !== undefined ? { arguments: action.arguments } : {}),
+    ...(action.result ? { result: action.result } : {}),
+    ...(action.error ? { error: action.error } : {}),
+  };
+  return `<article class="change is-${tone}">
+      <div class="meta">
+        <span class="badge badge-${tone}">${escapeHtml(toneLabel(action))}</span>
+        <span class="tag">Reported by proxy</span>
+        ${failed}
+      </div>
+      <h3>${escapeHtml(action.summary)}</h3>
+      <details class="more"><summary>Details</summary><pre>${escapeHtml(JSON.stringify(details, null, 2))}</pre></details>
+    </article>`;
+}
+
+function toneClass(tone: ActionTone): string {
+  switch (tone) {
+    case "created":
+      return "added";
+    case "changed":
+      return "modified";
+    case "removed":
+      return "removed";
+    case "read":
+      return "read";
+    case "unknown":
+      return "unknown";
+    default:
+      return assertNever(tone, "action tone");
+  }
+}
+
+function toneLabel(action: RecordedAction): string {
+  switch (action.tone) {
+    case "created":
+      return "Added";
+    case "changed":
+      return "Changed";
+    case "removed":
+      return action.verb === "send" ? "Sent" : "Deleted";
+    case "read":
+      return "Read";
+    case "unknown":
+      return "Unknown";
+    default:
+      return assertNever(action.tone, "action tone");
+  }
 }
 
 function renderClaims(receipt: Receipt): string {

@@ -43,7 +43,7 @@ export function validateAction(input: ActionInput): { action?: string; resource?
 }
 
 export function actionsToClaims(actions: LoggedAction[]): ClaimInput[] {
-  return actions.map((action) => {
+  return actions.filter((action) => action.source !== "proxy").map((action) => {
     const detail = [action.tool ? `Tool ${action.tool}` : "", action.detail ?? ""].filter(Boolean).join(". ");
     const claim: ClaimInput = {
       id: action.id,

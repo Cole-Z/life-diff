@@ -5,7 +5,11 @@ description: Verify what an agent changed in the user's accounts by snapshotting
 
 # Life Diff
 
-Life Diff reads the user's accounts itself and compares them with a snapshot taken before the work. The receipt is the record. An agent's message that the work is done is a claim, not proof.
+Life Diff writes one receipt of the tool calls it forwarded, and, where a service exposes history, a check against that history. An agent's message that the work is done is a claim, not proof.
+
+The hosted server is `https://lifediff.dev/mcp`. Register other MCP servers with `add_upstream` (name, https URL, optional token) or at `https://lifediff.dev/settings`. Their tools appear as `<name>__<tool>`. Reconnect after adding one if the tool list is stale. Call `end_session`, then `get_receipt`, and open the link. Lines from forwarded tools say reported by proxy. GitHub lines say verified from service history. Call `start_session` before the work when that GitHub check should be in the same receipt.
+
+The self-run command still reads the user's Google accounts itself and compares them with a snapshot. That path is below.
 
 The default sign-in reads Google Calendar and Drive file metadata. `lifediff auth --access full` also reads Drive activity, Drive revision metadata, the text of Docs, Sheets, Slides, and plain files, and Gmail subject, recipients, labels, and snippet. It still cannot create, edit, delete, or send anything. Message bodies are not requested. Snapshots stay in `~/.lifediff` with mode `0600`.
 

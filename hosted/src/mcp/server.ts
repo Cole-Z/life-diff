@@ -2,10 +2,13 @@ import { HOSTED_VERSION, SCOPES } from "../constants";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { appDeps, coreDeps } from "../app/runtime";
-import { endSession, getReceipt, listReceipts, logAction, startSession } from "../app/service";
-import { AppError } from "../app/service";
+import { endSession, getReceipt, listReceipts, logAction, startSession, AppError } from "../app/service";
 import type { Env } from "../env";
+import { invalidateUpstreamCache, registerUpstreamTools } from "./upstream-tools";
+import { addUpstream, listPublicUpstreams, removeUpstream } from "../proxy/upstreams";
+import { D1MetadataStore } from "../storage/d1";
 import type { ClaimInput } from "../receipt/types";
+import type { GitHubApi } from "../github/types";
 import { getMcpAuthContext } from "agents/mcp/server";
 
 const claimSchema = z.object({
@@ -17,7 +20,7 @@ const claimSchema = z.object({
   repo: z.string().optional(),
 });
 
-export function createLifeDiffServer(env: Env): McpServer {
+export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   const server = new McpServer({ name: "lifediff", version: HOSTED_VERSION });
   server.registerTool(
     "start_session",
@@ -56,7 +59,7 @@ export function createLifeDiffServer(env: Env): McpServer {
   server.registerTool(
     "end_session",
     {
-      description: "Diff GitHub against the session snapshot and write a receipt. Logged actions are claims. Life Diff stays read-only.",
+      description: "Close the session and write a receipt. Proxied tool calls are on the receipt. If this session snapshotted GitHub, the receipt also includes that verified diff.",
       inputSchema: z.object({
         sessionId: z.string().optional(),
         timeZone: z.string().optional(),
@@ -65,7 +68,11 @@ export function createLifeDiffServer(env: Env): McpServer {
       }),
     },
     async (input) => run(async () => {
-      const deps = await appDeps(env, user());
+      const who = user();
+      const now = new Date();
+      const core = coreDeps(env, who, now);
+      const open = await core.sessions.getOpen();
+      const deps = open?.snapshotKey ? await appDeps(env, who, now) : { ...core, github: idleGithub() };
       const result = await endSession(deps, {
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         ...(input.timeZone ? { timeZone: input.timeZone } : {}),
@@ -74,10 +81,11 @@ export function createLifeDiffServer(env: Env): McpServer {
       const payload = {
         summary: result.summary,
         receipt: result.receipt,
-        htmlUrl: `/receipts/${result.receipt.id}`,
+        url: receiptUrl(env, result.receipt.id),
+        htmlUrl: receiptUrl(env, result.receipt.id),
         ...(input.includeHtml ? { html: result.html } : {}),
       };
-      return text(`${result.summary}\n\nReceipt ${result.receipt.id}`, payload);
+      return text(`${result.summary}\n\n${receiptUrl(env, result.receipt.id)}`, payload);
     }),
   );
   server.registerTool(
@@ -94,10 +102,11 @@ export function createLifeDiffServer(env: Env): McpServer {
       const payload = {
         summary: result.receipt.counts,
         receipt: result.receipt,
-        htmlUrl: `/receipts/${result.receipt.id}`,
+        url: receiptUrl(env, result.receipt.id),
+        htmlUrl: receiptUrl(env, result.receipt.id),
         ...(input.includeHtml ? { html: result.html } : {}),
       };
-      return text(`Receipt ${result.receipt.id}`, payload);
+      return text(`Receipt ${result.receipt.id}\n${receiptUrl(env, result.receipt.id)}`, payload);
     }),
   );
   server.registerTool(
@@ -111,7 +120,77 @@ export function createLifeDiffServer(env: Env): McpServer {
       return text(receipts.map((receipt) => receipt.id).join("\n") || "No receipts yet.", { receipts });
     }),
   );
+  server.registerTool(
+    "add_upstream",
+    {
+      description: "Register an upstream MCP server. Its tools show up as <name>__<tool> and every call is recorded. Clients often cache the tool list, so reconnect if the new tools do not appear. The token is stored encrypted and is not returned.",
+      inputSchema: z.object({
+        name: z.string(),
+        url: z.string(),
+        token: z.string().optional(),
+        header: z.string().optional(),
+      }),
+    },
+    async (input) => run(async () => {
+      const who = user();
+      const added = await addUpstream(new D1MetadataStore(env.DB), who.userId, env.TOKEN_ENCRYPTION_KEY, new Date(), input);
+      invalidateUpstreamCache(who.userId);
+      try { server.sendToolListChanged(); } catch { /* stateless clients need to reconnect */ }
+      return text(`Added ${added.name}. Tools will be named ${added.name}__<tool>. Reconnect if you do not see them yet.`, { upstream: added, reconnect: true });
+    }),
+  );
+  server.registerTool(
+    "list_upstreams",
+    {
+      description: "List upstream MCP servers registered for this Life Diff account. Tokens are not included.",
+      inputSchema: z.object({}),
+    },
+    async () => run(async () => {
+      const upstreams = await listPublicUpstreams(new D1MetadataStore(env.DB), user().userId);
+      return text(upstreams.map((item) => `${item.name} ${item.url}`).join("\n") || "No upstreams yet.", { upstreams });
+    }),
+  );
+  server.registerTool(
+    "remove_upstream",
+    {
+      description: "Remove a registered upstream MCP server by name. Reconnect if the client still shows its tools.",
+      inputSchema: z.object({ name: z.string() }),
+    },
+    async (input) => run(async () => {
+      const who = user();
+      await removeUpstream(new D1MetadataStore(env.DB), who.userId, input.name);
+      invalidateUpstreamCache(who.userId);
+      try { server.sendToolListChanged(); } catch { /* stateless clients need to reconnect */ }
+      return text(`Removed ${input.name}. Reconnect if its tools are still listed.`, { removed: input.name, reconnect: true });
+    }),
+  );
+  try {
+    await registerUpstreamTools(server, env, user());
+  } catch {
+    // Built-in tools still answer when an upstream cannot be listed.
+  }
   return server;
+}
+
+function idleGithub(): GitHubApi {
+  const fail = async (): Promise<never> => {
+    throw new AppError("This session has no GitHub snapshot.");
+  };
+  return {
+    listInstallations: fail,
+    listInstallationRepos: fail,
+    listBranches: fail,
+    listPulls: fail,
+    listIssues: fail,
+    listCommits: fail,
+    compare: fail,
+    listIssueComments: fail,
+    listReviewComments: fail,
+  };
+}
+
+function receiptUrl(env: Env, id: string): string {
+  return `${env.ISSUER.replace(/\/$/, "")}/receipts/${id}`;
 }
 
 function user(): { userId: string; login: string } {

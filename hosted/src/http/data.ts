@@ -2,10 +2,11 @@ import { coreDeps } from "../app/runtime";
 import { AppError, getReceipt, logAction } from "../app/service";
 import { eraseUser, oauthServer } from "../auth/worker";
 import type { Env } from "../env";
+import { browserSession } from "./session";
 
 export async function handleData(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const auth = await requireUser(request, env);
+  const auth = await requireUser(request, env, url);
   if (auth instanceof Response) return auth;
   try {
     if (request.method === "DELETE" && url.pathname === "/v1/me") {
@@ -44,10 +45,14 @@ export async function handleData(request: Request, env: Env): Promise<Response> 
   return new Response("Not found", { status: 404 });
 }
 
-async function requireUser(request: Request, env: Env): Promise<{ userId: string; login: string; scope: string[] } | Response> {
+async function requireUser(request: Request, env: Env, url: URL): Promise<{ userId: string; login: string; scope: string[] } | Response> {
   const header = request.headers.get("authorization") ?? "";
   const match = /^Bearer\s+(\S+)$/i.exec(header);
   const token = match?.[1];
+  if (!token && request.method === "GET" && url.pathname.startsWith("/receipts/")) {
+    const session = await browserSession(request, env);
+    if (session) return { userId: session.sub, login: session.login, scope: ["receipts:read"] };
+  }
   if (!token) return new Response("Sign in required", { status: 401 });
   const validated = env.AUTH_SERVER
     ? await env.AUTH_SERVER.validateToken(env.MCP_SERVER_URL, token)

@@ -6,7 +6,8 @@ import {
 } from "@cloudflare/workers-oauth-provider";
 import { bindFetch } from "../bind-fetch";
 import { SCOPES } from "../constants";
-import { clearSessionCookieHeader, readCookie, readSession, sessionCookieHeader, signSession } from "../crypto/cookie";
+import { clearSessionCookieHeader, sessionCookieHeader, signSession } from "../crypto/cookie";
+import { browserSession } from "../http/session";
 import { codeChallengeS256, randomVerifier } from "../crypto/pkce";
 import type { Env } from "../env";
 import { authProps, exchangeGithubCode, fetchGithubProfile, githubAuthorizeUrl } from "../github/oauth";
@@ -15,6 +16,7 @@ import { D1MetadataStore, R2ObjectStore } from "../storage/d1";
 import { deleteUserData } from "../storage/retention";
 import { revokeAllGrants } from "./grants";
 import { renderAccount, renderConsentPage, renderDeleted, renderHome, renderPrivacy, renderSignedOut } from "../http/pages";
+import { handleSettings } from "../http/settings";
 import { sessionSweeper } from "../app/runtime";
 
 const SESSION_SECONDS = 7 * 24 * 60 * 60;
@@ -46,6 +48,7 @@ export async function handleApp(request: Request, env: Env, ctx: ExecutionContex
     if (url.pathname === "/callback") return await callback(request, env);
     if (url.pathname === "/account") return await account(request, env);
     if (url.pathname === "/account/delete") return await deleteAccount(request, env);
+    if (url.pathname === "/settings" || url.pathname === "/settings/remove") return await handleSettings(request, env);
     if (url.pathname === "/privacy") return html(renderPrivacy());
     if (url.pathname === "/health") return Response.json({ ok: true });
     if (url.pathname === "/") return html(renderHome());
@@ -171,9 +174,7 @@ export async function eraseUser(env: Env, userId: string): Promise<void> {
 }
 
 async function currentSession(request: Request, env: Env) {
-  const token = readCookie(request.headers.get("cookie"));
-  if (!token) return null;
-  return readSession(env.COOKIE_SIGNING_KEY, token, Math.floor(Date.now() / 1000));
+  return browserSession(request, env);
 }
 
 function html(body: string, status = 200, setCookie?: string): Response {

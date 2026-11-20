@@ -12,6 +12,7 @@ For a person who installs the GitHub App and signs in:
 - A session snapshot of repository metadata: branch names and commit ids, pull request and issue titles and labels, and later the commits, comments, and file paths that changed. File bodies and patches are not stored. A file change is recorded as a line count such as `+10 −2`.
 - An action log of what an agent claimed it did (`log_action` or `POST /v1/sessions/:id/actions`). Life Diff does not run those tools.
 - Receipt JSON and the HTML report, in object storage, plus counts and expiry in the database.
+- A daily diff for each local calendar day, stored so `/roundup` and `get_daily_diff` can return it. The stored settings are the IANA time zone (default America/Chicago), the end-of-workday time (default 18:00), and whether GitHub repository changes are included.
 - MCP access grants issued by Life Diff. A grant records the GitHub user id and login only. It does not contain the GitHub token. MCP clients receive a Life Diff token, not the GitHub token.
 
 ## What is not stored
@@ -29,11 +30,12 @@ These are the defaults baked into the Worker configuration:
 - After a session ends, the snapshot is deleted 24 hours later.
 - An open session that is never ended is deleted after 7 days, along with its snapshot and action log.
 
-A daily job applies those limits. Deleting a receipt or snapshot removes both the database row and the stored object.
+An hourly job applies those limits and finalizes a daily diff after the person's local end of workday. Deleting a receipt, snapshot, or daily diff removes both the database row and the stored object.
 
 ## How to delete it
 
-- In a browser, after GitHub has sent you back to Life Diff, open `https://lifediff.dev/account` and use **Delete my Life Diff data**. That form posts to `/account/delete` with a CSRF token.
+- On `https://lifediff.dev/settings`, **Clear my history** deletes sessions, receipts, and daily diffs. It leaves the GitHub sign-in and the registered upstream servers. An agent can call `clear_my_history` with `confirm: true` for the same thing.
+- In a browser, after GitHub has sent you back to Life Diff, open `https://lifediff.dev/account` and use **Delete my Life Diff data**. That form posts to `/account/delete` with a CSRF token. That deletes the account, including the GitHub sign-in, upstreams, settings, and history.
 - An agent with a Life Diff token can call `DELETE https://lifediff.dev/v1/me`.
 
 Deletion removes the user row, the encrypted GitHub token, installation ids, sessions, the action log, snapshots, receipts, and Life Diff MCP grants. It does not change GitHub. Uninstall the Life Diff GitHub App from GitHub settings separately. GitHub may keep its own copy of the authorization until that uninstall or a revoke on GitHub's side.

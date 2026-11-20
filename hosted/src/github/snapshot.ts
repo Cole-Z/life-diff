@@ -7,7 +7,18 @@ export async function takeSnapshot(api: GitHubApi, input: {
   maxRepos: number;
   repos?: string[];
 }): Promise<GitHubSnapshot> {
-  const wanted = new Set((input.repos ?? []).map((repo) => repo.toLowerCase()));
+  const named = (input.repos ?? []).map((repo) => repo.trim()).filter(Boolean);
+  if (named.length === 0) {
+    return {
+      schemaVersion: "1.0.0",
+      id: input.id,
+      takenAt: input.takenAt,
+      login: input.login,
+      repos: [],
+      warnings: ["No repositories were named, so GitHub history was not read."],
+    };
+  }
+  const wanted = new Set(named.map((repo) => repo.toLowerCase()));
   const warnings: string[] = [];
   const installations = await api.listInstallations();
   const refs: RepoRef[] = [];

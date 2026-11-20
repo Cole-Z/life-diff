@@ -79,9 +79,14 @@ describe("session flow", () => {
       meta,
       objects,
     };
-    const started = await startSession(deps, {});
+    const empty = await startSession(deps, {});
+    expect(empty.repos).toEqual([]);
+    const narrower = await startSession(deps, {});
+    expect(narrower.sessionId).toBe(empty.sessionId);
+    const started = await startSession(deps, { repos: ["acme/app"] });
+    expect(started.sessionId).not.toBe(empty.sessionId);
     expect(started.repos).toEqual(["acme/app"]);
-    const again = await startSession(deps, {});
+    const again = await startSession(deps, { repos: ["acme/app"] });
     expect(again.sessionId).toBe(started.sessionId);
     const logged = await logAction({ ...deps, now: new Date("2026-04-02T15:05:00.000Z") }, {
       tool: "github.create_file",

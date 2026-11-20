@@ -1,7 +1,8 @@
 import { actionsToClaims, validateAction, type ActionInput } from "../actions/log";
 import { newId, addDays, addHours, randomToken, validTimeZone } from "../text";
+import { DEFAULT_TIME_ZONE } from "../time";
 import { receiptCardKey, renderCardPng } from "../receipt/card";
-import { storyFromReceipt } from "../receipt/story";
+import { condenseLines, storyFromReceipt } from "../receipt/story";
 import { GitHubClient } from "../github/client";
 import { readAfter, takeSnapshot } from "../github/snapshot";
 import type { GitHubApi, GitHubSnapshot } from "../github/types";
@@ -68,8 +69,10 @@ export interface StartResult {
 const STALE_SESSION_MS = 30 * 60 * 1000;
 
 export async function startSession(deps: AppDeps, input: { repos?: string[]; timeZone?: string }): Promise<StartResult> {
+  const requested = namedRepos(input.repos);
+  const timeZone = await resolveZone(deps, input.timeZone);
   const open = await deps.sessions.getOpen();
-  if (open) {
+  if (open && sameRepos(open.repos, requested)) {
     const age = deps.now.getTime() - Date.parse(open.startedAt);
     if (Number.isFinite(age) && age < STALE_SESSION_MS) {
       return {
@@ -80,10 +83,12 @@ export async function startSession(deps: AppDeps, input: { repos?: string[]; tim
         warnings: open.warnings,
       };
     }
-    await endSession(deps, { sessionId: open.id });
   }
-  const timeZone = input.timeZone?.trim() || deps.timeZone || "UTC";
-  if (!validTimeZone(timeZone)) throw new AppError("timeZone must be an IANA name such as UTC or America/New_York.");
+  if (open) await endSession(deps, { sessionId: open.id, allowGitHubFailure: true });
+  if (requested.length === 0) {
+    const session = await startActionSession(deps, timeZone);
+    return { sessionId: session.id, snapshotId: session.snapshotId, takenAt: session.startedAt, repos: [], warnings: [] };
+  }
   const takenAt = deps.now.toISOString();
   const snapshotId = newId("snap", deps.now);
   let snapshot: GitHubSnapshot;
@@ -93,13 +98,14 @@ export async function startSession(deps: AppDeps, input: { repos?: string[]; tim
       takenAt,
       login: deps.login,
       maxRepos: deps.maxRepos,
-      ...(input.repos ? { repos: input.repos } : {}),
+      repos: requested,
     });
   } catch (error) {
     throw new AppError(error instanceof Error ? error.message : "GitHub snapshot failed");
   }
   if (snapshot.repos.length === 0) {
-    throw new AppError("No repositories are installed for the Life Diff GitHub App. Install it on a repository, then start again.");
+    const why = snapshot.warnings[0] ? ` ${snapshot.warnings[0]}` : "";
+    throw new AppError(`None of the named repositories are installed for the Life Diff GitHub App.${why}`);
   }
   const snapshotKey = `snapshots/${deps.userId}/${snapshotId}.json`;
   await deps.objects.put(snapshotKey, JSON.stringify(snapshot), "application/json");
@@ -112,6 +118,7 @@ export async function startSession(deps: AppDeps, input: { repos?: string[]; tim
     timeZone,
     repos: snapshot.repos.map((repo) => repo.fullName),
     warnings: snapshot.warnings,
+    githubOptIn: true,
   };
   await deps.sessions.start(session);
   await deps.meta.insertSession({
@@ -124,6 +131,7 @@ export async function startSession(deps: AppDeps, input: { repos?: string[]; tim
     snapshotExpiresAt: addDays(takenAt, deps.abandonedSessionDays),
     timeZone,
     repoCount: snapshot.repos.length,
+    githubOptIn: true,
   });
   return { sessionId, snapshotId, takenAt, repos: session.repos, warnings: snapshot.warnings };
 }
@@ -134,7 +142,7 @@ export interface EndResult {
   html: string;
 }
 
-export async function endSession(deps: AppDeps, input: { sessionId?: string; claims?: ClaimInput[]; timeZone?: string }): Promise<EndResult> {
+export async function endSession(deps: AppDeps, input: { sessionId?: string; claims?: ClaimInput[]; timeZone?: string; allowGitHubFailure?: boolean }): Promise<EndResult> {
   const open = await deps.sessions.getOpen();
   if (!open || (input.sessionId && input.sessionId !== open.id)) throw new AppError("There is no open session to end.");
   const checkedAt = deps.now.toISOString();
@@ -168,32 +176,13 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
       receipt.notes.push("Claims were not compared with GitHub because this session has no snapshot.");
     }
   } else {
-    const raw = await deps.objects.get(open.snapshotKey);
-    if (!raw) throw new AppError("The snapshot for this session is missing.");
-    const before = JSON.parse(raw) as GitHubSnapshot;
-    let after;
-    try {
-      after = await readAfter(deps.github, before, checkedAt);
-    } catch (error) {
-      throw new AppError(error instanceof Error ? error.message : "GitHub diff failed");
-    }
-    receipt = buildReceipt({
-      receiptId,
-      before,
-      after,
-      checkedAt,
-      timeZone,
-      claims,
-    });
-    if (actions.length > 0) {
-      receipt.actions = actions;
-      receipt.notes.push("Tool calls routed through Life Diff are marked reported by the proxy. They are not proof the service changed.");
-    }
+    const github = await readGitHubReceipt(deps, open, { receiptId, checkedAt, timeZone, claims, actions, allowFailure: input.allowGitHubFailure === true });
+    receipt = github;
   }
   const jsonKey = `receipts/${deps.userId}/${receiptId}.json`;
   const htmlKey = `receipts/${deps.userId}/${receiptId}.html`;
   try {
-    const png = await renderCardPng(storyFromReceipt(receipt), "Life Diff");
+    const png = await renderCardPng(condenseLines(storyFromReceipt(receipt), { detail: false }), "Life Diff");
     receipt.cardToken = randomToken();
     await deps.objects.putBytes(receiptCardKey(jsonKey), png, "image/png");
   } catch {
@@ -239,7 +228,8 @@ export async function ensureSession(deps: CoreDeps): Promise<OpenSession> {
   }
 }
 
-async function startActionSession(deps: CoreDeps): Promise<OpenSession> {
+async function startActionSession(deps: CoreDeps, timeZone?: string): Promise<OpenSession> {
+  const zone = timeZone && validTimeZone(timeZone) ? timeZone : await resolveZone(deps);
   const takenAt = deps.now.toISOString();
   const sessionId = newId("ses", deps.now);
   const session: OpenSession = {
@@ -247,7 +237,7 @@ async function startActionSession(deps: CoreDeps): Promise<OpenSession> {
     startedAt: takenAt,
     snapshotId: "none",
     snapshotKey: "",
-    timeZone: deps.timeZone || "UTC",
+    timeZone: zone,
     repos: [],
     warnings: [],
   };
@@ -260,10 +250,102 @@ async function startActionSession(deps: CoreDeps): Promise<OpenSession> {
     snapshotId: "none",
     snapshotKey: "",
     snapshotExpiresAt: addDays(takenAt, deps.abandonedSessionDays),
-    timeZone: session.timeZone,
+    timeZone: zone,
     repoCount: 0,
   });
   return session;
+}
+
+async function readGitHubReceipt(deps: AppDeps, open: OpenSession, input: {
+  receiptId: string;
+  checkedAt: string;
+  timeZone: string;
+  claims: ClaimInput[] | null;
+  actions: RecordedAction[];
+  allowFailure: boolean;
+}): Promise<Receipt> {
+  const fallback = (note: string): Receipt => {
+    const receipt = buildActionReceipt({
+      receiptId: input.receiptId,
+      startedAt: open.startedAt,
+      checkedAt: input.checkedAt,
+      timeZone: input.timeZone,
+      actions: input.actions,
+    });
+    receipt.notes.push(note);
+    return receipt;
+  };
+  const raw = await deps.objects.get(open.snapshotKey);
+  if (!raw) {
+    if (input.allowFailure) return fallback("The GitHub snapshot was missing, so this receipt has no repository diff.");
+    throw new AppError("The snapshot for this session is missing.");
+  }
+  try {
+    const before = JSON.parse(raw) as GitHubSnapshot;
+    const after = await readAfter(deps.github, before, input.checkedAt);
+    const receipt = buildReceipt({
+      receiptId: input.receiptId,
+      before,
+      after,
+      checkedAt: input.checkedAt,
+      timeZone: input.timeZone,
+      claims: input.claims,
+      githubOptIn: open.githubOptIn === true,
+    });
+    if (input.actions.length > 0) {
+      receipt.actions = input.actions;
+      receipt.notes.push("Tool calls routed through Life Diff are marked reported by the proxy. They are not proof the service changed.");
+    }
+    return receipt;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (!input.allowFailure) throw new AppError(error instanceof Error ? error.message : "GitHub diff failed");
+    return fallback("GitHub could not be re-read, so this receipt has no repository diff.");
+  }
+}
+
+async function resolveZone(deps: CoreDeps, requested?: string): Promise<string> {
+  const settings = await deps.meta.getSettings(deps.userId);
+  const explicit = requested?.trim();
+  if (explicit) {
+    if (!validTimeZone(explicit)) throw new AppError("timeZone must be an IANA name such as America/Chicago.");
+    if (explicit !== settings.timeZone) {
+      await deps.meta.saveSettings(deps.userId, { ...settings, timeZone: explicit }, deps.now.toISOString());
+    }
+    return explicit;
+  }
+  return validTimeZone(settings.timeZone) ? settings.timeZone : DEFAULT_TIME_ZONE;
+}
+
+function namedRepos(repos: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const repo of repos ?? []) {
+    const trimmed = repo.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function sameRepos(left: string[], right: string[]): boolean {
+  const norm = (repos: string[]) => repos.map((repo) => repo.toLowerCase()).sort().join("\n");
+  return norm(left) === norm(right);
+}
+
+export async function sealOpenSession(deps: AppDeps): Promise<void> {
+  const open = await deps.sessions.getOpen();
+  if (!open) return;
+  await endSession(deps, { sessionId: open.id, allowGitHubFailure: true });
+}
+
+export async function clearHistory(deps: { userId: string; meta: CoreDeps["meta"]; objects: CoreDeps["objects"] }, wipe: () => Promise<void>): Promise<void> {
+  const keys = [...await deps.meta.userObjectKeys(deps.userId), `users/${deps.userId}/roundup.json`];
+  await deps.objects.delete(keys);
+  await wipe();
+  await deps.meta.clearHistory(deps.userId);
 }
 
 export async function recordProxyCall(deps: CoreDeps, input: {

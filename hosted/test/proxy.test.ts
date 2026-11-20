@@ -5,7 +5,7 @@ import { forwardToolCall } from "../src/proxy/forward";
 import { classifyToolName, plainAction } from "../src/proxy/classify";
 import { callUpstreamTool, listUpstreamTools, parseSse } from "../src/proxy/client";
 import { namespaceTool, splitNamespaced } from "../src/proxy/namespace";
-import { redactValue } from "../src/proxy/redact";
+import { pickSubject, redactValue } from "../src/proxy/redact";
 import { addUpstream, listPublicUpstreams } from "../src/proxy/upstreams";
 import { renderHtml } from "../src/receipt/html";
 import { SessionBook } from "../src/session/book";
@@ -47,6 +47,12 @@ describe("classification and names", () => {
     expect(namespaceTool("deepwiki", "weird name")).toBe("deepwiki__weird_name");
     expect(splitNamespaced("deepwiki__ask_question")).toEqual({ upstream: "deepwiki", tool: "ask_question" });
     expect(splitNamespaced("start_session")).toBeNull();
+  });
+});
+
+describe("subjects", () => {
+  it("prefers the question over a repository name", () => {
+    expect(pickSubject({ repo: "facebook/react", question: "How does React work?" })).toBe("How does React work?");
   });
 });
 
@@ -173,8 +179,8 @@ describe("upstream forwarding", () => {
     expect(ended.receipt.actions).toHaveLength(3);
     expect(ended.receipt.actions?.[0]?.summary).toBe("Added “Q2 goals” in Notes.");
     expect(ended.receipt.changes).toHaveLength(0);
-    expect(ended.html).toContain("Reported by proxy");
-    expect(ended.html).toContain("Verified from service history");
+    expect(ended.html).toContain("Reported by the proxy");
+    expect(ended.html).toContain("Verified lines come from a service");
     expect(ended.html.indexOf("Added “Q2 goals”")).toBeLessThan(ended.html.indexOf("<details class=\"reads\">"));
     expect(ended.html).not.toContain("sekret");
     expect(ended.summary).toContain("Added “Q2 goals” in Notes.");
@@ -253,7 +259,7 @@ describe("auto session and upstream secrets", () => {
     });
     expect(html).toContain("<details class=\"reads\">");
     expect(html).toContain("badge-read");
-    expect(html).toContain("Reported by proxy");
+    expect(html).toContain("Reported by the proxy");
   });
 });
 

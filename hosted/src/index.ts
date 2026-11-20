@@ -9,6 +9,7 @@ import { classify } from "./http/routes";
 import { createLifeDiffServer } from "./mcp/server";
 import { sessionSweeper } from "./app/runtime";
 import { D1MetadataStore, R2ObjectStore } from "./storage/d1";
+import { finalizeDueDays } from "./app/finalize";
 import { runRetention } from "./storage/retention";
 import { UserSession } from "./session/user-session";
 
@@ -84,5 +85,6 @@ async function runCron(env: Env, now: Date): Promise<void> {
     nowIso: now.toISOString(),
     limit: 100,
   });
+  await finalizeDueDays(env, now);
   await oauthServer(env).purgeExpiredData(env, { batchSize: 50 });
 }

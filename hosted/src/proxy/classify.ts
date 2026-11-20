@@ -38,7 +38,7 @@ export function plainAction(service: string, classification: Classification, sub
   const label = serviceLabel(service);
   const name = tool?.trim() || "";
   if (!ok) {
-    return subject ? `Tried to use ${label} for “${subject}”, and it failed.` : `Tried to use ${label}, and it failed.`;
+    return subject ? `${label} failed on “${subject}”.` : `${label} failed.`;
   }
   switch (classification.tone) {
     case "created":

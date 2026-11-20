@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { endSession, recordProxyCall, sessionPortFromBook, startSession } from "../src/app/service";
 import { renderCardPng } from "../src/receipt/card";
 import { buildRoundup } from "../src/receipt/roundup";
-import { renderStory, storyFromReceipt } from "../src/receipt/story";
+import { condenseLines, headlineFor, renderStory, storyFromReceipt } from "../src/receipt/story";
 import { undoHint } from "../src/receipt/undo";
 import { SessionBook } from "../src/session/book";
 import { MemoryMetadataStore, MemoryObjectStore } from "../src/storage/memory";
@@ -23,7 +23,7 @@ describe("undo hints", () => {
       arguments: { title: "Standup" },
       result: '{"id":"evt_1"}',
     });
-    expect(created).toBe("Undo: delete “Standup” (evt_1) via google_calendar__delete_event.");
+    expect(created).toBe('Undo: delete "Standup" (evt_1) via google_calendar__delete_event.');
     const sent = undoHint({
       tool: "send_message",
       upstream: "slack",
@@ -33,8 +33,7 @@ describe("undo hints", () => {
       summary: "Sent “hi” from Slack.",
       arguments: { text: "hi", url: "https://slack.example/archives/C1" },
     });
-    expect(sent).toContain("cannot auto-undo");
-    expect(sent).toContain("https://slack.example/archives/C1");
+    expect(sent).toBeUndefined();
     const updated = undoHint({
       tool: "update_event",
       upstream: "google_calendar",
@@ -94,22 +93,22 @@ describe("inline receipt", () => {
         link: "https://github.com/acme/app/issues/2",
       }],
     } as Receipt;
-    const lines = storyFromReceipt(receipt);
+    const lines = condenseLines(storyFromReceipt(receipt), { detail: false });
     const markdown = renderStory({
-      title: "Life Diff receipt",
+      headline: headlineFor(lines, "This session"),
       lines,
       link: "https://lifediff.dev/receipts/rcpt_test",
-      linkLabel: "Open the receipt",
+      linkLabel: "Full receipt",
       imageUrl: "https://lifediff.dev/receipts/rcpt_test/card.png?t=ab",
     });
-    expect(markdown).toContain("🟡");
+    expect(markdown).toContain("🔴");
     expect(markdown).toContain("⚪");
-    expect(markdown.indexOf("## GitHub")).toBeLessThan(markdown.indexOf("## deepwiki"));
-    expect(markdown).toContain("```diff");
-    expect(markdown).toContain("- Status: open");
-    expect(markdown).toContain("+ Status: closed");
-    expect(markdown).toContain("Undo: cannot auto-undo. https://github.com/acme/app/issues/2");
-    expect(markdown.trim().endsWith("https://lifediff.dev/receipts/rcpt_test")).toBe(true);
+    expect(markdown).toContain("1 read across Deepwiki");
+    expect(markdown).not.toContain("```diff");
+    expect(markdown).not.toContain("cannot auto-undo");
+    expect(markdown).not.toMatch(/`[a-z0-9]{2}`/);
+    expect(markdown).toContain("Full receipt: https://lifediff.dev/receipts/rcpt_test");
+    expect(markdown.trim().endsWith("https://lifediff.dev/receipts/rcpt_test/card.png?t=ab")).toBe(true);
     const png = await renderCardPng(lines, "Life Diff");
     expect(png[0]).toBe(137);
     expect(png[1]).toBe(80);
@@ -157,17 +156,14 @@ describe("roundup", () => {
     expect(first.markdown).toContain("🟢");
     expect(first.markdown).toContain("google_calendar__delete_event");
     expect(first.markdown).toContain("evt_1");
+    expect(first.markdown.startsWith("Today:")).toBe(true);
     expect(first.imageUrl).toContain("/roundup/card.png?t=");
     expect(first.png[0]).toBe(137);
-    const id = first.lines.find((line) => line.write)?.id;
+    const id = first.lines.find((line) => line.undo)?.id;
     expect(id).toMatch(/^[a-z0-9]{2}$/);
     const second = await buildRoundup({ ...deps, now: new Date("2026-04-02T18:00:00.000Z") }, { save: true });
-    expect(second.lines.some((line) => line.summary.includes("Standup"))).toBe(false);
-    const again = await buildRoundup(
-      { ...deps, now: new Date("2026-04-02T18:00:00.000Z") },
-      { save: false, since: "2026-04-02T15:00:00.000Z" },
-    );
-    expect(again.lines.find((line) => line.write)?.id).toBe(id);
+    expect(second.lines.some((line) => line.summary.includes("Standup"))).toBe(true);
+    expect(second.lines.find((line) => line.undo)?.id).toBe(id);
   });
 });
 

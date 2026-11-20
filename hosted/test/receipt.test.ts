@@ -131,7 +131,7 @@ describe("GitHub diff", () => {
     const types = diff.changes.map((change) => `${change.kind}:${change.resourceType}:${change.resourceName}`);
     expect(types).toContain("added:commit:Fix login flow");
     expect(types).toContain("added:branch:topic");
-    expect(types).toContain("removed:branch:feature");
+    expect(types).not.toContain("removed:branch:feature");
     expect(types).toContain("modified:branch:main");
     expect(types).toContain("modified:pull_request:Fix login flow");
     expect(types).toContain("modified:issue:Bug");
@@ -179,12 +179,23 @@ describe("GitHub diff", () => {
     expect(changes.some((change) => change.kind === "removed" && change.resourceType === "branch")).toBe(false);
   });
 
-  it("reports a removal only when both lists are complete", () => {
+  it("does not treat a missing open issue as removed, even when the later list looks complete", () => {
     const before = snapshot();
+    before.repos[0]!.issues = Array.from({ length: 10 }, (_, index) => ({
+      number: index + 1,
+      title: `Open ${index + 1}`,
+      state: "open" as const,
+      labels: [],
+      updatedAt: started,
+    }));
     const read = after();
     read.snapshot.repos[0]!.issues = [];
-    const removed = diffGitHub(before, read, checked).changes.find((change) => change.resourceType === "issue" && change.kind === "removed");
-    expect(removed?.resourceName).toBe("Bug");
+    read.snapshot.repos[0]!.issuesTruncated = false;
+    read.snapshot.repos[0]!.issuesPartial = false;
+    const changes = diffGitHub(before, read, checked).changes.filter((change) => change.resourceType === "issue");
+    expect(changes.some((change) => change.kind === "removed")).toBe(false);
+    expect(changes.some((change) => change.summary.includes("Removed"))).toBe(false);
+    expect(JSON.stringify(changes)).not.toContain("Open 1");
   });
 
   it("keeps a just-closed issue and does not remove issues outside the since window", async () => {

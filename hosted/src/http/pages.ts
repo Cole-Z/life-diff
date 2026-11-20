@@ -30,10 +30,10 @@ export function renderConsentPage(view: ConsentView, handle: string): string {
 
 export function renderHome(): string {
   return layout("Life Diff", `<h1>Life Diff</h1>
-    <p>One receipt of everything your agent did, on any tool.</p>
-    <p>Add <code>https://lifediff.dev/mcp</code> to your agent. Register the other MCP servers it should use, and Life Diff forwards those calls and writes them on one receipt.</p>
-    <p>GitHub is a supporting check. When a session snapshotted GitHub, the receipt also shows what GitHub itself recorded.</p>
-    <p><a href="/settings">Upstreams</a> · <a href="/roundup">Roundup</a> · <a href="/account">Account</a> · <a href="/privacy">Privacy</a></p>`);
+    <p>What did all your AI agents change today?</p>
+    <p>Add <code>https://lifediff.dev/mcp</code> to your agent. Register the other tools it should use, and Life Diff writes one color-coded before-and-after receipt for the day.</p>
+    <p>GitHub is only the sign-in. Repository history stays off until you name repositories for a session and turn it on here.</p>
+    <p><a href="/settings">Settings</a> · <a href="/roundup">Today</a> · <a href="/account">Account</a> · <a href="/privacy">Privacy</a></p>`);
 }
 
 export function renderPrivacy(): string {
@@ -73,7 +73,13 @@ export interface SettingsUpstream {
   hasToken: boolean;
 }
 
-export function renderSettings(login: string, csrf: string, upstreams: SettingsUpstream[], error?: string): string {
+export interface SettingsView {
+  timeZone: string;
+  dayEnd: string;
+  githubDaily: boolean;
+}
+
+export function renderSettings(login: string, csrf: string, upstreams: SettingsUpstream[], settings: SettingsView, error?: string): string {
   const rows = upstreams.length === 0
     ? `<p>No upstreams yet. Add the MCP server your agent should call through Life Diff.</p>`
     : upstreams.map((item) => `<li>
@@ -87,9 +93,19 @@ export function renderSettings(login: string, csrf: string, upstreams: SettingsU
         </form>
       </li>`).join("");
   const message = error ? `<p>${escapeHtml(error)}</p>` : "";
-  return layout("Upstreams", `<h1>Upstream MCP servers</h1>
-    <p>Signed in as <strong>${escapeHtml(login)}</strong>. Tools from these servers appear as <code>name__tool</code>. Life Diff records each call. The token stays on Life Diff and is not shown again.</p>
+  return layout("Settings", `<h1>Settings</h1>
+    <p>Signed in as <strong>${escapeHtml(login)}</strong>. A day is your local calendar day. Life Diff stores the day's diff at the end of your workday.</p>
     ${message}
+    <form method="post" action="/settings/preferences">
+      <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+      <label>Time zone <input name="timeZone" required value="${escapeHtml(settings.timeZone)}" placeholder="America/Chicago"></label>
+      <label>End of workday <input name="dayEnd" type="time" required value="${escapeHtml(settings.dayEnd)}"></label>
+      <label><input type="checkbox" name="githubDaily" value="on" ${settings.githubDaily ? "checked" : ""}> Include GitHub repository changes in the daily diff</label>
+      <p>Off until you turn it on. Life Diff only reads repositories you name in <code>start_session</code>.</p>
+      <button>Save</button>
+    </form>
+    <h2>Tools your agents use</h2>
+    <p>Tools from these servers appear as <code>name__tool</code>. Life Diff records each call. The token stays on Life Diff and is not shown again.</p>
     <ul>${rows}</ul>
     <form method="post" action="/settings">
       <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
@@ -98,29 +114,14 @@ export function renderSettings(login: string, csrf: string, upstreams: SettingsU
       <label>Token, optional <input name="token" type="password" autocomplete="off"></label>
       <button>Add upstream</button>
     </form>
-    <p>After adding one, reconnect the agent if it still shows the old tool list.</p>`);
-}
-
-export interface RoundupLineView {
-  service: string;
-  marker: string;
-  text: string;
-  color: string;
-}
-
-export function renderRoundup(login: string, since: string, lines: RoundupLineView[], imageUrl?: string, preview?: boolean): string {
-  const note = preview
-    ? `<p>This is the last 24 hours. It is not saved until an agent calls <code>get_roundup</code>.</p>`
-    : `<p>Signed in as <strong>${escapeHtml(login)}</strong>. Since ${escapeHtml(since)}.</p>`;
-  const image = imageUrl ? `<p><img src="${escapeHtml(imageUrl)}" alt="Life Diff roundup"></p>` : "";
-  const body = lines.length === 0
-    ? `<p>Nothing in this window.</p>`
-    : lines.map((line) => `<li style="color:${escapeHtml(line.color)}">${escapeHtml(line.marker)} ${escapeHtml(line.text)}</li>`).join("");
-  return layout("Roundup", `<h1>Roundup</h1>
-    ${note}
-    ${image}
-    <ul>${body}</ul>
-    <p>Green is added, amber is changed, red is deleted or sent, and gray is a read. Life Diff does not undo anything. The agent does, if you ask.</p>`);
+    <p>After adding one, reconnect the agent if it still shows the old tool list.</p>
+    <h2>History</h2>
+    <p>This deletes sessions, receipts, and daily diffs for this account. Upstream servers and the GitHub sign-in stay.</p>
+    <form method="post" action="/settings/clear">
+      <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+      <label><input type="checkbox" name="confirm" value="yes" required> Delete my Life Diff history</label>
+      <button>Clear my history</button>
+    </form>`);
 }
 
 export function renderSignedOut(): string {

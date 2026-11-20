@@ -2,7 +2,7 @@
   "name": "life-diff-hosted",
   "private": true,
   "version": "0.1.0",
-  "description": "Hosted Life Diff: a read-only GitHub receipt service and remote MCP server on Cloudflare Workers.",
+  "description": "Hosted Life Diff: a daily before/after of what your AI agents changed, on Cloudflare Workers.",
   "type": "module",
   "scripts": {
     "test": "vitest run",

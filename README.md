@@ -1,10 +1,10 @@
 # Life Diff
 
-One receipt of everything your agent did, on any tool.
+What did all your AI agents change today?
 
-Life Diff sits on the path between the agent and the tools. Each tool call that goes through it is recorded: when it happened, which service, what was asked, whether it worked, how long it took, and whether it looks like a read or a change. The receipt is one page. Green is something added, amber is something changed, red is something deleted or sent, and gray is a read. A person who does not write code can read the one-line summary. Details are there if you want them.
+Life Diff is a daily before-and-after of the tools your agents used. Green is something created, amber is something changed, red is something deleted or sent, gray is a read, and a warning mark is a call that failed. A person who does not write code can read the one-line summary. The web page keeps the per-file detail behind an expander.
 
-GitHub is a supporting check. When a session snapshotted GitHub, the receipt also shows what GitHub itself recorded, labeled **verified from service history**. Lines Life Diff recorded by forwarding a tool are labeled **reported by proxy**. A proxied line is not proof the service changed. A verified line exists only where that service exposes history.
+GitHub is the sign-in. It is also an optional extra: Life Diff reads repository history only for repositories you name in `start_session`, and only after you turn that on in settings. The daily page stays a life diff until you do. Lines from forwarded tools are labeled **reported by the proxy**. A proxied line is not proof the service changed. A verified line exists only where that service exposes history, and an item is removed only when the service says it was removed or closed. Missing from a list is not a deletion.
 
 Life Diff only sees calls that are routed through it. A tool the agent calls some other way is absent. The proxy does not block, rewrite, or retry a call.
 
@@ -25,9 +25,9 @@ Register the other MCP servers the agent should use. On [lifediff.dev/settings](
 
 Reconnect the agent after adding an upstream. Clients often cache `tools/list`. Life Diff also sends `notifications/tools/list_changed` when the client can receive it. The new tools are named `deepwiki__read_wiki_structure`, `deepwiki__read_wiki_contents`, and `deepwiki__ask_wiki_question`: the upstream name, two underscores, then the tool name.
 
-Let the agent call two or three of those tools. The first forwarded call opens a session if you did not call `start_session`. Then call `end_session` and `get_receipt`. Open the link in the reply. Writes are listed first. Reads are collapsed.
+Let the agent call two or three of those tools. The first forwarded call opens a session if you did not call `start_session`. Call `end_session` when that piece of work is finished. At the end of the day, call `get_daily_diff` (`get_roundup` is the same tool) and show the markdown. The day is your local calendar day, America/Chicago until you set another zone on the settings page. Open sessions are closed into that day. The full page is [lifediff.dev/roundup](https://lifediff.dev/roundup).
 
-Call `start_session` before the other work if you want the GitHub check in the same receipt. A session the proxy opened by itself has no GitHub snapshot. End that session before `start_session` if you want both.
+Pass `repos` to `start_session` only for repositories you want in that session. Leave it out and Life Diff does not read GitHub. Turn on **Include GitHub repository changes** in settings before those changes appear on the daily page.
 
 `list_upstreams` and `remove_upstream` manage the same list. Tokens are encrypted with the existing key and are never returned or written to a log.
 
@@ -198,7 +198,7 @@ A bare array is also accepted. `action` may be `added`, `removed`, `modified`, o
 
 ## MCP server
 
-The hosted server is `https://lifediff.dev/mcp`. Its tools are `start_session`, `end_session`, `get_receipt`, `get_roundup`, `log_action`, `list_receipts`, `add_upstream`, `list_upstreams`, and `remove_upstream`, plus one namespaced tool for each tool on a registered upstream. `end_session` and `get_receipt` return markdown and a receipt image to show verbatim. A session from the last 30 minutes is reused. An older open session is closed into a receipt first. `get_roundup` merges recent sessions. The page is [lifediff.dev/roundup](https://lifediff.dev/roundup).
+The hosted server is `https://lifediff.dev/mcp`. Its tools are `start_session`, `end_session`, `get_daily_diff`, `get_roundup`, `get_receipt`, `list_receipts`, `log_action`, `add_upstream`, `list_upstreams`, `remove_upstream`, and `clear_my_history`, plus one namespaced tool for each tool on a registered upstream. `end_session`, `get_receipt`, and `get_daily_diff` return markdown to show as-is. A session from the last 30 minutes is reused when it covers the same repositories. An older open session, or one with a different repository list, is closed into a receipt first. `get_daily_diff` is the day's diff across every session. `get_roundup` is the same tool. The page is [lifediff.dev/roundup](https://lifediff.dev/roundup). Listing notes are in [docs/marketplace.md](docs/marketplace.md). Nothing in this repository publishes the server to a registry.
 
 `lifediff mcp` is the local stdio server for the Google snapshot. Run `lifediff auth` once first. The tools are `snapshot`, `diff`, and `get_receipt`. Logs stay off stdout so they do not break the protocol. `lifediff proxy -- <command>` is the local pass-through described above.
 

@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": "evt_dentist",
+      "status": "confirmed",
+      "summary": "Dentist",
+      "location": "Clinic",
+      "updated": "2026-04-02T15:20:00Z",
+      "start": {"dateTime": "2026-04-08T10:00:00-04:00", "timeZone": "America/New_York"},
+      "end": {"dateTime": "2026-04-08T11:00:00-04:00", "timeZone": "America/New_York"}
+    }
+  ],
+  "nextSyncToken": "sync-2"
+}

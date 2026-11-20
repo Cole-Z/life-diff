@@ -1,0 +1,204 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "rcpt_sample",
+  "generatedAt": "2026-04-02T15:40:00Z",
+  "readOnly": true,
+  "producer": {
+    "name": "lifediff",
+    "version": "0.1.0"
+  },
+  "snapshot": {
+    "id": "snap_sample",
+    "takenAt": "2026-04-02T15:00:00Z"
+  },
+  "comparedAt": "2026-04-02T15:40:00Z",
+  "timeZone": "America/New_York",
+  "session": {
+    "startedAt": "2026-04-02T15:00:00Z",
+    "checkedAt": "2026-04-02T15:40:00Z"
+  },
+  "calendar": {
+    "calendarId": "primary",
+    "windowStart": "2026-04-02T04:00:00Z",
+    "windowEnd": "2026-07-01T04:00:00Z",
+    "diffMode": "sync"
+  },
+  "drive": {
+    "query": "trashed = false",
+    "diffMode": "changes",
+    "truncatedSnapshot": false
+  },
+  "counts": {
+    "added": 1,
+    "removed": 1,
+    "modified": 3,
+    "verifiedClaims": 1,
+    "missingClaims": 1,
+    "unclaimedChanges": 4
+  },
+  "changes": [
+    {
+      "id": "chg_b094dabbbccc",
+      "service": "calendar",
+      "kind": "added",
+      "resourceId": "evt_pickup",
+      "resourceName": "School pickup",
+      "summary": "Added \"School pickup\" on Fri, Apr 10, 2:30 PM–3:00 PM.",
+      "fields": [
+        {
+          "field": "title",
+          "label": "Title",
+          "before": "",
+          "after": "School pickup"
+        },
+        {
+          "field": "start",
+          "label": "Starts",
+          "before": "",
+          "after": "Fri, Apr 10, 2:30 PM"
+        },
+        {
+          "field": "end",
+          "label": "Ends",
+          "before": "",
+          "after": "Fri, Apr 10, 3:00 PM"
+        },
+        {
+          "field": "location",
+          "label": "Location",
+          "before": "",
+          "after": "Lincoln Elementary"
+        }
+      ],
+      "occurredAt": "2026-04-02T15:10:00Z",
+      "confidence": "high",
+      "confidenceReason": "Google saved this during the session, between the snapshot and this check.",
+      "claimStatus": "unclaimed",
+      "link": "https://www.google.com/calendar/event?eid=pickup"
+    },
+    {
+      "id": "chg_ab434ea6c397",
+      "service": "calendar",
+      "kind": "modified",
+      "resourceId": "evt_dentist",
+      "resourceName": "Dentist",
+      "summary": "Moved \"Dentist\" from Tue, Apr 7, 3:00 PM to Wed, Apr 8, 10:00 AM. Changed the location of \"Dentist\" from \"Office\" to \"Clinic\".",
+      "fields": [
+        {
+          "field": "start",
+          "label": "Starts",
+          "before": "Tue, Apr 7, 3:00 PM",
+          "after": "Wed, Apr 8, 10:00 AM"
+        },
+        {
+          "field": "end",
+          "label": "Ends",
+          "before": "Tue, Apr 7, 4:00 PM",
+          "after": "Wed, Apr 8, 11:00 AM"
+        },
+        {
+          "field": "location",
+          "label": "Location",
+          "before": "Office",
+          "after": "Clinic"
+        }
+      ],
+      "occurredAt": "2026-04-02T15:20:00Z",
+      "confidence": "high",
+      "confidenceReason": "Google saved this during the session, between the snapshot and this check.",
+      "claimStatus": "verified",
+      "link": "https://www.google.com/calendar/event?eid=dentist"
+    },
+    {
+      "id": "chg_b081ee49a5c6",
+      "service": "calendar",
+      "kind": "modified",
+      "resourceId": "evt_gym",
+      "resourceName": "Morning gym",
+      "summary": "Renamed \"Gym\" to \"Morning gym\".",
+      "fields": [
+        {
+          "field": "title",
+          "label": "Title",
+          "before": "Gym",
+          "after": "Morning gym"
+        }
+      ],
+      "occurredAt": "2026-03-01T12:00:00Z",
+      "confidence": "low",
+      "confidenceReason": "Google dates this before the snapshot, so it may not have been done in this session.",
+      "claimStatus": "unclaimed"
+    },
+    {
+      "id": "chg_9eef4949b7a9",
+      "service": "drive",
+      "kind": "modified",
+      "resourceId": "file_vac",
+      "resourceName": "Vacation ideas (final)",
+      "summary": "Renamed \"Vacation ideas\" to \"Vacation ideas (final)\". Updated the contents of \"Vacation ideas (final)\".",
+      "fields": [
+        {
+          "field": "name",
+          "label": "Name",
+          "before": "Vacation ideas",
+          "after": "Vacation ideas (final)"
+        },
+        {
+          "field": "content",
+          "label": "Contents",
+          "before": "version 3, saved Wed, Apr 1, 8:00 AM",
+          "after": "version 4, saved Thu, Apr 2, 11:25 AM"
+        }
+      ],
+      "occurredAt": "2026-04-02T15:25:00Z",
+      "confidence": "high",
+      "confidenceReason": "Google saved this during the session, between the snapshot and this check.",
+      "claimStatus": "unclaimed",
+      "link": "https://docs.google.com/document/d/file_vac"
+    },
+    {
+      "id": "chg_8b2d89e61671",
+      "service": "drive",
+      "kind": "removed",
+      "resourceId": "file_old",
+      "resourceName": "Old draft.docx",
+      "summary": "Removed \"Old draft.docx\" from Drive.",
+      "fields": [],
+      "occurredAt": "2026-04-02T15:30:00Z",
+      "confidence": "high",
+      "confidenceReason": "Google saved this during the session, between the snapshot and this check.",
+      "claimStatus": "unclaimed"
+    }
+  ],
+  "claimsChecked": true,
+  "claims": [
+    {
+      "id": "claim_dentist",
+      "service": "calendar",
+      "action": "modified",
+      "target": "Dentist",
+      "detail": "Moved to Wednesday at 10:00 AM",
+      "status": "verified",
+      "confidence": "high",
+      "matchedChangeIds": [
+        "chg_ab434ea6c397"
+      ],
+      "reason": "This matches a Calendar change to \"Dentist\"."
+    },
+    {
+      "id": "claim_goals",
+      "service": "drive",
+      "action": "added",
+      "target": "Q2 goals",
+      "detail": "Created a doc named Q2 goals",
+      "status": "missing",
+      "reason": "No matching change showed up in Drive."
+    }
+  ],
+  "notes": [
+    "This receipt is from Google's records, not from what the agent said.",
+    "Life Diff only read data. It did not change Calendar or Drive.",
+    "Drive file contents are not downloaded. A content update means Drive saved a new version; the old and new text are not shown.",
+    "Times are shown in America/New_York."
+  ]
+}

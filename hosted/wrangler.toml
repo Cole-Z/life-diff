@@ -31,8 +31,7 @@ custom_domain = true
 ENVIRONMENT = "production"
 ISSUER = "https://lifediff.dev"
 MCP_SERVER_URL = "https://lifediff.dev/mcp"
-# Still a placeholder. Fill this in on this branch when the client id arrives.
-GITHUB_APP_CLIENT_ID = "replace-with-github-app-client-id"
+GITHUB_APP_CLIENT_ID = "Iv23liCCBcNdwnWlUjz6"
 GITHUB_APP_SLUG = "life-diff"
 RECEIPT_RETENTION_DAYS = "90"
 SNAPSHOT_RETENTION_HOURS = "24"

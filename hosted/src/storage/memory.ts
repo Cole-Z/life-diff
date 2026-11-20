@@ -1,6 +1,8 @@
+import { DEFAULT_SETTINGS, type UserSettings } from "../time";
 import type {
   AbandonedSession,
   CredentialRow,
+  DailyDiffRow,
   ExpiredReceipt,
   ExpiredSnapshot,
   InstallationRow,
@@ -20,6 +22,8 @@ export class MemoryMetadataStore implements MetadataStore {
   sessions = new Map<string, SessionRow>();
   receipts = new Map<string, ReceiptRow>();
   upstreams = new Map<string, UpstreamRecord>();
+  settings = new Map<string, UserSettings>();
+  daily = new Map<string, DailyDiffRow>();
 
   async upsertUser(user: { id: string; login: string; now: string }): Promise<void> {
     const existing = this.users.get(user.id);
@@ -96,6 +100,9 @@ export class MemoryMetadataStore implements MetadataStore {
     for (const receipt of this.receipts.values()) {
       if (receipt.userId === userId) keys.push(receipt.jsonKey, receipt.htmlKey, receipt.jsonKey.replace(/\.json$/, ".png"));
     }
+    for (const row of this.daily.values()) {
+      if (row.userId === userId) keys.push(row.jsonKey, row.htmlKey, ...(row.cardKey ? [row.cardKey] : []));
+    }
     return keys;
   }
 
@@ -106,6 +113,47 @@ export class MemoryMetadataStore implements MetadataStore {
     for (const [id, row] of this.upstreams) if (row.userId === userId) this.upstreams.delete(id);
     for (const [id, session] of this.sessions) if (session.userId === userId) this.sessions.delete(id);
     for (const [id, receipt] of this.receipts) if (receipt.userId === userId) this.receipts.delete(id);
+    this.settings.delete(userId);
+    for (const [id, row] of this.daily) if (row.userId === userId) this.daily.delete(id);
+  }
+
+  async getSettings(userId: string): Promise<UserSettings> {
+    return { ...(this.settings.get(userId) ?? DEFAULT_SETTINGS) };
+  }
+
+  async saveSettings(userId: string, settings: UserSettings, _now: string): Promise<void> {
+    this.settings.set(userId, { ...settings });
+  }
+
+  async listUsers(): Promise<{ id: string; login: string }[]> {
+    return [...this.users.values()].map((user) => ({ id: user.id, login: user.login }));
+  }
+
+  async listReceiptsBetween(userId: string, start: string, end: string, limit: number): Promise<ReceiptMeta[]> {
+    return [...this.receipts.values()]
+      .filter((row) => row.userId === userId && row.createdAt >= start && row.createdAt < end)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(0, limit)
+      .map(toMeta);
+  }
+
+  async getDaily(userId: string, day: string): Promise<DailyDiffRow | null> {
+    const row = this.daily.get(`${userId}\0${day}`);
+    return row ? { ...row } : null;
+  }
+
+  async listDaily(userId: string): Promise<DailyDiffRow[]> {
+    return [...this.daily.values()].filter((row) => row.userId === userId).map((row) => ({ ...row }));
+  }
+
+  async saveDaily(row: DailyDiffRow): Promise<void> {
+    this.daily.set(`${row.userId}\0${row.day}`, { ...row });
+  }
+
+  async clearHistory(userId: string): Promise<void> {
+    for (const [id, session] of this.sessions) if (session.userId === userId) this.sessions.delete(id);
+    for (const [id, receipt] of this.receipts) if (receipt.userId === userId) this.receipts.delete(id);
+    for (const [id, row] of this.daily) if (row.userId === userId) this.daily.delete(id);
   }
 
   async expiredReceipts(nowIso: string, limit: number): Promise<ExpiredReceipt[]> {

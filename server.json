@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Cole-Z/life-diff",
+  "title": "Life Diff",
+  "description": "A daily before/after of what your AI agents changed across your tools.",
+  "version": "0.3.0",
+  "websiteUrl": "https://lifediff.dev",
+  "repository": {
+    "url": "https://github.com/Cole-Z/life-diff",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://lifediff.dev/mcp"
+    }
+  ]
+}

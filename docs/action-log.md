@@ -12,7 +12,7 @@ Each upstream is a streamable HTTP URL plus an optional bearer token or static h
 
 `https://lifediff.dev/mcp` keeps the existing tools (`start_session`, `log_action`, `end_session`, `get_receipt`, `list_receipts`) and also exposes every upstream tool as `<upstream>__<tool>`. `tools/list` and `tools/call` are forwarded. Life Diff starts an MCP session with the upstream (`initialize`, `notifications/initialized`, and the `mcp-session-id` header) and accepts either a JSON body or an SSE `event: message` body.
 
-Every forwarded `tools/call` is appended to the user's open session. If none is open, Life Diff opens one. A session opened this way has no GitHub snapshot. Call `start_session` first when the receipt should also include a verified GitHub diff, and end any proxy-only session before starting that one.
+Every forwarded `tools/call` is appended to the user's open session. If none is open, Life Diff opens one. A session opened this way has no GitHub snapshot. `start_session` reads GitHub only for repositories passed in `repos`. A later `start_session` with a different list closes the previous session instead of keeping the wider one.
 
 A recorded call stores:
 
@@ -32,7 +32,9 @@ A recorded call stores:
 
 Redaction replaces values whose keys contain `token`, `secret`, `password`, `authorization`, `key`, or `cookie` with `[redacted]`. The forwarded call still receives the original arguments. The receipt does not.
 
-Classification looks at words in the tool name. `delete`, `remove`, and `send` are red writes. `create`, `add`, and `insert` are green. `update`, `move`, `write`, `post`, `edit`, `patch`, and `set` are amber. `ask`, `read`, `get`, `describe`, `lookup`, `check`, `list`, `search`, `fetch`, and `query` are gray reads. A write word wins over a read word. Anything else is unknown. A read is summarized as “Asked Deepwiki: …” or “Read read_wiki_structure from Deepwiki.” A closed GitHub issue or pull request is a change, not a removal. A removal is reported only when both lists are complete. `get_roundup` merges recent receipts. Each write line has a short id and an Undo hint. Life Diff does not run the undo.
+Classification looks at words in the tool name. `delete`, `remove`, and `send` are red writes. `create`, `add`, and `insert` are green. `update`, `move`, `write`, `post`, `edit`, `patch`, and `set` are amber. `ask`, `read`, `get`, `describe`, `lookup`, `check`, `list`, `search`, `fetch`, and `query` are gray reads. A write word wins over a read word. Anything else is unknown. The sentence uses the most human argument it can find, in this order: question, title, subject, name, query, then one nested level of the same. A repository name is not used when a question is present. A failed call is a warning, including when the tool name looks like a read. A failed attempt followed by a successful retry of the same call is one line.
+
+A GitHub issue or pull request is closed only when the later read says its state is closed or merged. A name that is absent from a later list is not reported as removed. `get_daily_diff` (and `get_roundup`, the same tool) returns the user's local calendar day across every session. Reads collapse to one count. An undo hint and its short id appear only when there is a real undo. Life Diff does not run the undo.
 
 An upstream failure is returned to the agent as an MCP tool error and is still recorded.
 

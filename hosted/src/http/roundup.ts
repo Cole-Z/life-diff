@@ -1,10 +1,10 @@
 import type { Env } from "../env";
 import { buildRoundup, loadRoundup, roundupCardKey } from "../receipt/roundup";
-import { markerFor, type StoryLine } from "../receipt/story";
 import { D1MetadataStore, R2ObjectStore } from "../storage/d1";
 import { coreDeps } from "../app/runtime";
-import { renderRoundup, renderSignedOut } from "./pages";
+import { renderSignedOut } from "./pages";
 import { browserSession } from "./session";
+import { localClock } from "../time";
 
 export async function handleRoundup(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -12,21 +12,19 @@ export async function handleRoundup(request: Request, env: Env): Promise<Respons
   if (request.method !== "GET") return new Response("Not found", { status: 404 });
   const session = await browserSession(request, env);
   if (!session) return html(renderSignedOut(), 401);
+  const dated = /^\/roundup\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);
   const deps = {
     ...coreDeps(env, { userId: session.sub, login: session.login }),
     issuer: env.ISSUER,
     meta: new D1MetadataStore(env.DB),
     objects: new R2ObjectStore(env.RECEIPTS),
   };
-  const stored = await loadRoundup(deps);
-  const roundup = stored ?? await buildRoundup(deps, { save: false });
-  const lines = roundup.lines.map((line) => ({
-    service: line.service,
-    marker: markerFor(line.tone),
-    text: lineText(line),
-    color: colorFor(line.tone),
-  }));
-  return html(renderRoundup(session.login, roundup.since, lines, roundup.imageUrl, !stored));
+  const settings = await deps.meta.getSettings(session.sub);
+  const today = localClock(deps.now, settings.timeZone).date;
+  const day = dated?.[1] ?? today;
+  const stored = await loadRoundup(deps, day);
+  const roundup = stored ?? await buildRoundup(deps, { date: day, save: day < today, finalize: day < today });
+  return html(roundup.html);
 }
 
 async function serveRoundupCard(env: Env, token: string): Promise<Response> {
@@ -34,25 +32,6 @@ async function serveRoundupCard(env: Env, token: string): Promise<Response> {
   const png = await new R2ObjectStore(env.RECEIPTS).getBytes(roundupCardKey(token));
   if (!png) return new Response("Not found", { status: 404 });
   return new Response(png, { headers: { "content-type": "image/png", "cache-control": "private, max-age=300" } });
-}
-
-function lineText(line: StoryLine): string {
-  const id = line.id ? `${line.id} ` : "";
-  const undo = line.undo ? ` ${line.undo}` : "";
-  return `${id}${line.summary}${undo}`;
-}
-
-function colorFor(tone: StoryLine["tone"]): string {
-  switch (tone) {
-    case "created":
-      return "#0f5c32";
-    case "changed":
-      return "#6b4300";
-    case "removed":
-      return "#8d1c1c";
-    default:
-      return "#5c564c";
-  }
 }
 
 function html(body: string, status = 200): Response {

@@ -1,6 +1,9 @@
+import { validTimeZone } from "../text";
+import { DEFAULT_SETTINGS, parseDayEnd, type UserSettings } from "../time";
 import type {
   AbandonedSession,
   CredentialRow,
+  DailyDiffRow,
   ExpiredReceipt,
   ExpiredSnapshot,
   InstallationRow,
@@ -74,9 +77,9 @@ export class D1MetadataStore implements MetadataStore {
 
   async insertSession(row: SessionRow): Promise<void> {
     await this.db.prepare(
-      `INSERT INTO sessions (id, user_id, started_at, ended_at, status, snapshot_id, snapshot_r2_key, snapshot_expires_at, receipt_id, time_zone, repo_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(row.id, row.userId, row.startedAt, row.endedAt ?? null, row.status, row.snapshotId, row.snapshotKey, row.snapshotExpiresAt, row.receiptId ?? null, row.timeZone, row.repoCount).run();
+      `INSERT INTO sessions (id, user_id, started_at, ended_at, status, snapshot_id, snapshot_r2_key, snapshot_expires_at, receipt_id, time_zone, repo_count, github_opt_in)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(row.id, row.userId, row.startedAt, row.endedAt ?? null, row.status, row.snapshotId, row.snapshotKey, row.snapshotExpiresAt, row.receiptId ?? null, row.timeZone, row.repoCount, row.githubOptIn ? 1 : 0).run();
   }
 
   async closeSession(input: { id: string; endedAt: string; receiptId: string; snapshotExpiresAt: string }): Promise<void> {
@@ -131,9 +134,13 @@ export class D1MetadataStore implements MetadataStore {
     const receipts = await this.db.prepare(
       `SELECT json_r2_key, html_r2_key FROM receipts WHERE user_id = ?`,
     ).bind(userId).all<{ json_r2_key: string; html_r2_key: string }>();
+    const days = await this.db.prepare(
+      `SELECT json_r2_key, html_r2_key, card_r2_key FROM daily_diffs WHERE user_id = ?`,
+    ).bind(userId).all<{ json_r2_key: string; html_r2_key: string; card_r2_key: string | null }>();
     return [
       ...snapshots.results.map((row) => row.snapshot_r2_key),
       ...receipts.results.flatMap((row) => [row.json_r2_key, row.html_r2_key, row.json_r2_key.replace(/\.json$/, ".png")]),
+      ...days.results.flatMap((row) => [row.json_r2_key, row.html_r2_key, ...(row.card_r2_key ? [row.card_r2_key] : [])]),
     ];
   }
 
@@ -143,6 +150,8 @@ export class D1MetadataStore implements MetadataStore {
     await this.db.prepare(`DELETE FROM installations WHERE user_id = ?`).bind(userId).run();
     await this.db.prepare(`DELETE FROM github_credentials WHERE user_id = ?`).bind(userId).run();
     await this.db.prepare(`DELETE FROM upstreams WHERE user_id = ?`).bind(userId).run();
+    await this.db.prepare(`DELETE FROM user_settings WHERE user_id = ?`).bind(userId).run();
+    await this.db.prepare(`DELETE FROM daily_diffs WHERE user_id = ?`).bind(userId).run();
     await this.db.prepare(`DELETE FROM users WHERE id = ?`).bind(userId).run();
   }
 
@@ -208,6 +217,78 @@ export class D1MetadataStore implements MetadataStore {
     if (!existing) return false;
     await this.db.prepare(`DELETE FROM upstreams WHERE user_id = ? AND name = ?`).bind(userId, name).run();
     return true;
+  }
+
+  async getSettings(userId: string): Promise<UserSettings> {
+    const row = await this.db.prepare(
+      `SELECT time_zone, day_end, github_daily FROM user_settings WHERE user_id = ?`,
+    ).bind(userId).first<{ time_zone: string; day_end: string; github_daily: number }>();
+    if (!row) return { ...DEFAULT_SETTINGS };
+    return {
+      timeZone: validTimeZone(row.time_zone) ? row.time_zone : DEFAULT_SETTINGS.timeZone,
+      dayEnd: parseDayEnd(row.day_end) ? row.day_end : DEFAULT_SETTINGS.dayEnd,
+      githubDaily: row.github_daily === 1,
+    };
+  }
+
+  async saveSettings(userId: string, settings: UserSettings, now: string): Promise<void> {
+    await this.db.prepare(
+      `INSERT INTO user_settings (user_id, time_zone, day_end, github_daily, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         time_zone = excluded.time_zone,
+         day_end = excluded.day_end,
+         github_daily = excluded.github_daily,
+         updated_at = excluded.updated_at`,
+    ).bind(userId, settings.timeZone, settings.dayEnd, settings.githubDaily ? 1 : 0, now).run();
+  }
+
+  async listUsers(): Promise<{ id: string; login: string }[]> {
+    const rows = await this.db.prepare(`SELECT id, login FROM users ORDER BY created_at`).all<{ id: string; login: string }>();
+    return rows.results;
+  }
+
+  async listReceiptsBetween(userId: string, start: string, end: string, limit: number): Promise<ReceiptMeta[]> {
+    const rows = await this.db.prepare(
+      `SELECT id, session_id, created_at, expires_at, json_r2_key, html_r2_key, added, removed, modified, verified_claims, missing_claims, unclaimed_changes
+       FROM receipts WHERE user_id = ? AND created_at >= ? AND created_at < ? ORDER BY created_at ASC LIMIT ?`,
+    ).bind(userId, start, end, limit).all<ReceiptSql>();
+    return rows.results.map(receiptMeta);
+  }
+
+  async getDaily(userId: string, day: string): Promise<DailyDiffRow | null> {
+    const row = await this.db.prepare(
+      `SELECT user_id, day, finalized_at, json_r2_key, html_r2_key, card_r2_key, created_at, updated_at
+       FROM daily_diffs WHERE user_id = ? AND day = ?`,
+    ).bind(userId, day).first<DailySql>();
+    return row ? dailyRow(row) : null;
+  }
+
+  async listDaily(userId: string): Promise<DailyDiffRow[]> {
+    const rows = await this.db.prepare(
+      `SELECT user_id, day, finalized_at, json_r2_key, html_r2_key, card_r2_key, created_at, updated_at
+       FROM daily_diffs WHERE user_id = ? ORDER BY day DESC`,
+    ).bind(userId).all<DailySql>();
+    return rows.results.map(dailyRow);
+  }
+
+  async saveDaily(row: DailyDiffRow): Promise<void> {
+    await this.db.prepare(
+      `INSERT INTO daily_diffs (user_id, day, finalized_at, json_r2_key, html_r2_key, card_r2_key, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, day) DO UPDATE SET
+         finalized_at = excluded.finalized_at,
+         json_r2_key = excluded.json_r2_key,
+         html_r2_key = excluded.html_r2_key,
+         card_r2_key = excluded.card_r2_key,
+         updated_at = excluded.updated_at`,
+    ).bind(row.userId, row.day, row.finalizedAt ?? null, row.jsonKey, row.htmlKey, row.cardKey ?? null, row.createdAt, row.updatedAt).run();
+  }
+
+  async clearHistory(userId: string): Promise<void> {
+    await this.db.prepare(`DELETE FROM receipts WHERE user_id = ?`).bind(userId).run();
+    await this.db.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
+    await this.db.prepare(`DELETE FROM daily_diffs WHERE user_id = ?`).bind(userId).run();
   }
 }
 
@@ -281,6 +362,30 @@ function upstreamRecord(row: UpstreamSql): UpstreamRecord {
     url: row.url,
     createdAt: row.created_at,
     ...(row.auth_enc ? { authEnc: row.auth_enc } : {}),
+  };
+}
+
+interface DailySql {
+  user_id: string;
+  day: string;
+  finalized_at: string | null;
+  json_r2_key: string;
+  html_r2_key: string;
+  card_r2_key: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function dailyRow(row: DailySql): DailyDiffRow {
+  return {
+    userId: row.user_id,
+    day: row.day,
+    jsonKey: row.json_r2_key,
+    htmlKey: row.html_r2_key,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.finalized_at ? { finalizedAt: row.finalized_at } : {}),
+    ...(row.card_r2_key ? { cardKey: row.card_r2_key } : {}),
   };
 }
 

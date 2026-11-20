@@ -1,6 +1,6 @@
 # Hosted Life Diff
 
-Hosted Life Diff is a Cloudflare Worker. It signs a person in with a GitHub App, snapshots the repositories that app is installed on, and writes a read-only receipt of what changed during an agent session. An MCP client talks to Life Diff. Life Diff talks to GitHub. The GitHub token never goes to the client.
+Hosted Life Diff is a Cloudflare Worker. A person signs in with a GitHub App. The product is a daily diff of the tool calls their agents routed through Life Diff. GitHub repository history is off until they name repositories for a session and turn it on. The GitHub token never goes to the client.
 
 This service does not use Google. Calendar and Drive stay in the self-run command, where each person brings their own OAuth client.
 
@@ -59,19 +59,20 @@ MCP_SERVER_URL=http://localhost:8787/mcp
 
 MCP tools, all of which require the scopes `receipts:read` and `sessions:write`:
 
-- `start_session` takes a GitHub snapshot. A second session is refused while one is open.
-- `end_session` writes the receipt. If the session snapshotted GitHub, it re-reads GitHub and diffs the window. Proxied tool calls are included either way.
-- `get_receipt` returns a stored receipt, markdown to show verbatim, a receipt image, and a link to the receipt page. Pass `includeHtml` for the HTML report.
-- `get_roundup` merges recent sessions into one receipt in that same markdown and image. It does not run undos. The signed-in page is `/roundup`.
-- `log_action` records a claimed action. Life Diff does not run the tool.
+- `start_session` opens a session. `repos` is optional. Life Diff snapshots only the repositories named there. With no repos, it records tool calls and does not read GitHub.
+- `end_session` closes the session and returns a short receipt. Show the markdown to the user.
+- `get_daily_diff` returns the user's local day (optional `date`, optional `detail`). `get_roundup` is the same tool. Show the markdown. The signed-in page is `/roundup`, and a past day is `/roundup/YYYY-MM-DD`.
+- `get_receipt` returns one stored receipt.
+- `log_action` records a claim in the agent's words. Life Diff does not run the tool.
 - `list_receipts` lists receipt metadata.
 - `add_upstream` registers an upstream MCP server (name, https URL, optional token or header). The token is encrypted and not returned.
 - `list_upstreams` lists name, URL, and whether a token is stored.
 - `remove_upstream` removes one by name.
+- `clear_my_history` deletes sessions, receipts, and daily diffs when `confirm` is true. It leaves upstreams and the GitHub sign-in in place. The settings page has the same button.
 
 The same `/mcp` endpoint then exposes each upstream tool as `<name>__<tool>` and records every forwarded call. Signed-in browsers manage the same list at `/settings`. After adding an upstream, reconnect the MCP client if it cached the tool list.
 
-A new D1 migration, `0002_upstreams.sql`, creates the `upstreams` table. Apply it with the same command as the first migration, from `hosted/`:
+`0002_upstreams.sql` creates the `upstreams` table. `0003_daily.sql` adds `sessions.github_opt_in`, `user_settings` (time zone, end of workday, GitHub daily toggle), and `daily_diffs`. Apply migrations before deploying this Worker, from `hosted/`:
 
 ```bash
 npx wrangler d1 migrations apply life-diff --remote
@@ -105,7 +106,7 @@ Retention defaults:
 - Snapshots after a session ends: 24 hours
 - Open sessions that are never ended: 7 days
 
-A daily cron deletes expired receipts, expired snapshots, and abandoned sessions. It also purges expired OAuth rows.
+An hourly cron deletes expired receipts, expired snapshots, and abandoned sessions, purges expired OAuth rows, and finalizes each user's daily diff once their local end of workday has passed (default 6:00 PM, America/Chicago until they change it).
 
 ## Architecture
 
@@ -118,7 +119,7 @@ Token checks run in-process. A service binding from this Worker back to itself c
 
 Life Diff issues its own MCP tokens. The GitHub user-to-server token is refreshed lazily and stays on the Worker. Consent is shown on every authorization. The OAuth `state` and PKCE values come from `@cloudflare/workers-oauth-provider` (`beginConsent`, `approveConsent`, `beginUpstream`, `finishUpstream`). The GitHub authorize request uses PKCE S256 and does not send a client secret or an OAuth `scope` parameter. GitHub App permissions are configured on the app, not on the authorize URL. Webhooks are off. `end_session` polls.
 
-The snapshot reads at most 25 repositories. A truncated branch, pull, or issue page copies the missing before-state forward so those items are not reported as removed. A failed re-read of a repository suppresses removals for that repository. Compare results stop at 300 files or 250 commits.
+The snapshot reads only repositories the session named, at most 25. An item is removed or closed only when GitHub's later read says so. A name that is missing from a list is left out of the diff. Compare results stop at 300 files or 250 commits.
 
 ## Create the GitHub App
 

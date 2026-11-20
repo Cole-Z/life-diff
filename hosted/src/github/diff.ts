@@ -31,9 +31,8 @@ export function diffGitHub(before: GitHubSnapshot, after: AfterRead, checkedAt: 
       changes.push(...diffRepo(prior, later, before.takenAt, checkedAt));
     } else if (later && !prior) {
       changes.push(repoChange("added", later, before.takenAt, checkedAt));
-    } else if (prior && !later && !repoListsTruncated(before, after)) {
-      changes.push(repoChange("removed", prior, before.takenAt, checkedAt));
     }
+    // A repository missing from a later list is not a deletion. GitHub did not say it was removed.
   }
   const knownShas = new Set(before.repos.flatMap((repo) => repo.branches.map((branch) => branch.sha)));
   for (const commit of after.commits) {
@@ -69,47 +68,21 @@ function diffRepo(before: RepoSnap, after: RepoSnap, startedAt: string, checkedA
 function diffBranches(before: RepoSnap, after: RepoSnap, startedAt: string, checkedAt: string): Change[] {
   const prior = new Map(before.branches.map((branch) => [branch.name, branch]));
   const later = new Map(after.branches.map((branch) => [branch.name, branch]));
-  const allowRemoval = listIsComplete(before.branchesTruncated, after.branchesTruncated);
   const changes: Change[] = [];
   for (const [name, branch] of later) {
     const old = prior.get(name);
     if (!old) changes.push(branchChange("added", after.fullName, branch, undefined, startedAt, checkedAt));
     else if (old.sha !== branch.sha) changes.push(branchChange("modified", after.fullName, branch, old, startedAt, checkedAt));
   }
-  if (allowRemoval) {
-    for (const [name, branch] of prior) {
-      if (!later.has(name)) changes.push(branchChange("removed", before.fullName, branch, undefined, startedAt, checkedAt));
-    }
-  }
   return changes;
 }
 
 function diffPulls(before: RepoSnap, after: RepoSnap, startedAt: string, checkedAt: string): Change[] {
-  return diffNumbered(
-    before.pulls,
-    after.pulls,
-    (item) => item.number,
-    (kind, item, old) => pullChange(kind, after.fullName || before.fullName, item, old, startedAt, checkedAt),
-    listIsComplete(before.pullsTruncated, after.pullsTruncated),
-  );
+  return diffNumbered(before.pulls, after.pulls, (item) => item.number, (kind, item, old) => pullChange(kind, after.fullName || before.fullName, item, old, startedAt, checkedAt));
 }
 
 function diffIssues(before: RepoSnap, after: RepoSnap, startedAt: string, checkedAt: string): Change[] {
-  return diffNumbered(
-    before.issues,
-    after.issues,
-    (item) => item.number,
-    (kind, item, old) => issueChange(kind, after.fullName || before.fullName, item, old, startedAt, checkedAt),
-    listIsComplete(before.issuesTruncated || before.issuesPartial, after.issuesTruncated || after.issuesPartial),
-  );
-}
-
-function listIsComplete(beforeIncomplete?: boolean, afterIncomplete?: boolean): boolean {
-  return !beforeIncomplete && !afterIncomplete;
-}
-
-function repoListsTruncated(before: GitHubSnapshot, after: AfterRead): boolean {
-  return [...before.warnings, ...after.snapshot.warnings].some((warning) => warning.includes("Repository list truncated"));
+  return diffNumbered(before.issues, after.issues, (item) => item.number, (kind, item, old) => issueChange(kind, after.fullName || before.fullName, item, old, startedAt, checkedAt));
 }
 
 function diffNumbered<T>(
@@ -117,24 +90,15 @@ function diffNumbered<T>(
   after: T[],
   numberOf: (item: T) => number,
   build: (kind: ChangeKind, item: T, old: T | undefined) => Change | null,
-  allowRemoval: boolean,
 ): Change[] {
   const prior = new Map(before.map((item) => [numberOf(item), item]));
   const later = new Map(after.map((item) => [numberOf(item), item]));
   const changes: Change[] = [];
-  for (const [number, item] of later) {
-    const old = prior.get(number);
+  for (const [, item] of later) {
+    const old = prior.get(numberOf(item));
     const kind: ChangeKind = old ? "modified" : "added";
     const change = build(kind, item, old);
     if (change) changes.push(change);
-  }
-  if (allowRemoval) {
-    for (const [number, item] of prior) {
-      if (!later.has(number)) {
-        const change = build("removed", item, undefined);
-        if (change) changes.push(change);
-      }
-    }
   }
   return changes;
 }
@@ -198,14 +162,17 @@ function pullChange(kind: ChangeKind, repo: string, pull: PullSnap, old: PullSna
     }
   }
   const who = attribution(pull.user, undefined);
-  const closed = kind === "modified" && old?.state === "open" && !old.merged && (pull.state === "closed" || pull.merged);
+  const mergedNow = kind === "modified" && pull.merged && !old?.merged;
+  const closed = kind === "modified" && old?.state === "open" && !old.merged && pull.state === "closed" && !pull.merged;
   const summary = kind === "added"
     ? `Opened pull request ${quoteName(pull.title)} (#${pull.number}) on ${repo}${who}.`
     : kind === "removed"
       ? `Removed pull request ${quoteName(pull.title)} (#${pull.number}) on ${repo}.`
-      : closed
-        ? `Closed pull request ${quoteName(pull.title)} (#${pull.number}) on ${repo}${who}.`
-        : `Updated pull request ${quoteName(pull.title)} (#${pull.number}) on ${repo}${who}.`;
+      : mergedNow
+        ? `Merged pull request ${quoteName(pull.title)} (#${pull.number}) on ${repo}${who}.`
+        : closed
+          ? `Closed pull request ${quoteName(pull.title)} (#${pull.number}) on ${repo}${who}.`
+          : `Updated pull request ${quoteName(pull.title)} (#${pull.number}) on ${repo}${who}.`;
   return baseChange({
     kind,
     repo,

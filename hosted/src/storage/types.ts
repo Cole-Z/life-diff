@@ -1,3 +1,7 @@
+import type { UserSettings } from "../time";
+
+export type { UserSettings };
+
 export interface CredentialRow {
   userId: string;
   accessTokenEnc: string;
@@ -17,6 +21,7 @@ export interface SessionRow {
   snapshotExpiresAt: string;
   timeZone: string;
   repoCount: number;
+  githubOptIn?: boolean;
   endedAt?: string;
   receiptId?: string;
 }
@@ -87,6 +92,17 @@ export interface UpstreamRecord {
   createdAt: string;
 }
 
+export interface DailyDiffRow {
+  userId: string;
+  day: string;
+  finalizedAt?: string;
+  jsonKey: string;
+  htmlKey: string;
+  cardKey?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MetadataStore {
   upsertUser(user: { id: string; login: string; now: string }): Promise<void>;
   saveCredentials(row: CredentialRow): Promise<void>;
@@ -110,6 +126,14 @@ export interface MetadataStore {
   listUpstreams(userId: string): Promise<UpstreamRecord[]>;
   insertUpstream(row: UpstreamRecord): Promise<void>;
   deleteUpstream(userId: string, name: string): Promise<boolean>;
+  getSettings(userId: string): Promise<UserSettings>;
+  saveSettings(userId: string, settings: UserSettings, now: string): Promise<void>;
+  listUsers(): Promise<{ id: string; login: string }[]>;
+  listReceiptsBetween(userId: string, start: string, end: string, limit: number): Promise<ReceiptMeta[]>;
+  getDaily(userId: string, day: string): Promise<DailyDiffRow | null>;
+  listDaily(userId: string): Promise<DailyDiffRow[]>;
+  saveDaily(row: DailyDiffRow): Promise<void>;
+  clearHistory(userId: string): Promise<void>;
 }
 
 export interface ObjectStore {

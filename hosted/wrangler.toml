@@ -72,5 +72,7 @@ new_sqlite_classes = ["UserSession"]
 # service = "life-diff-auth"
 # entrypoint = "AuthServer"
 
+# Hourly, so each user's local end of day (default 6:00 PM) is finalized
+# within an hour. Retention runs on the same trigger.
 [triggers]
-crons = ["15 5 * * *"]
+crons = ["5 * * * *"]

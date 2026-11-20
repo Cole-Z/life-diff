@@ -71,6 +71,8 @@ export interface ReceiptGitHub {
   truncatedSnapshot: boolean;
   truncatedChanges: boolean;
   suppressedRemovals: boolean;
+  /** True only when this session named repositories. Older receipts omit it. */
+  optIn?: boolean;
 }
 
 export interface Counts {

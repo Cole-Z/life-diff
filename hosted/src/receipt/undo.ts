@@ -5,23 +5,22 @@ import type { RecordedAction } from "./types";
 export function undoHint(action: Pick<RecordedAction, "tool" | "upstream" | "verb" | "tone" | "effect" | "arguments" | "result" | "summary">): string | undefined {
   const write = action.effect === "write" || action.tone === "created" || action.tone === "changed" || action.tone === "removed";
   if (!write) return undefined;
-  const link = findLink(action.arguments) ?? findLink(action.result);
   if (action.tone === "removed" || action.verb === "send" || action.verb === "delete" || action.verb === "remove") {
-    return link ? `Undo: cannot auto-undo. ${link}` : "Undo: cannot auto-undo.";
+    return undefined;
   }
   if (action.tone === "created" || action.verb === "create" || action.verb === "add" || action.verb === "insert") {
     const subject = pickSubject(action.arguments) || "it";
     const id = findId(action.arguments) ?? findId(action.result);
     const tool = `${action.upstream}__${inverseTool(action.tool)}`;
-    const what = id ? `“${subject}” (${id})` : `“${subject}”`;
+    const what = id ? `"${subject}" (${id})` : `"${subject}"`;
     return `Undo: delete ${what} via ${tool}.`;
   }
   if (action.tone === "changed" || action.verb === "update" || action.verb === "edit" || action.verb === "patch" || action.verb === "set") {
     const prior = priorPhrase(action.arguments);
     if (prior) return `Undo: restore ${prior} via ${action.upstream}__${action.tool}.`;
-    return link ? `Undo: cannot auto-undo. ${link}` : "Undo: cannot auto-undo. Prior values were not captured.";
+    return undefined;
   }
-  return link ? `Undo: cannot auto-undo. ${link}` : "Undo: cannot auto-undo.";
+  return undefined;
 }
 
 function inverseTool(name: string): string {
@@ -49,26 +48,12 @@ function findId(value: unknown): string | undefined {
   return undefined;
 }
 
-function findLink(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const match = value.match(/https:\/\/[^\s)]+/);
-    return match?.[0]?.slice(0, 200);
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  for (const key of ["url", "htmlUrl", "html_url", "link", "permalink"]) {
-    const item = record[key];
-    if (typeof item === "string" && item.startsWith("https://")) return item.slice(0, 200);
-  }
-  return undefined;
-}
-
 function priorPhrase(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   for (const key of ["previous", "prior", "before", "old"]) {
     const item = record[key];
-    if (typeof item === "string" && item.trim()) return `“${item.trim().slice(0, 80)}”`;
+    if (typeof item === "string" && item.trim()) return `"${item.trim().slice(0, 80)}"`;
     if (item && typeof item === "object" && !Array.isArray(item)) {
       const parts = Object.entries(item as Record<string, unknown>)
         .filter((entry): entry is [string, string | number] => typeof entry[1] === "string" || typeof entry[1] === "number")

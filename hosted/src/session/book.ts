@@ -6,6 +6,8 @@ export interface OpenSession {
   timeZone: string;
   repos: string[];
   warnings: string[];
+  /** The user named these repositories for this session. */
+  githubOptIn?: boolean;
 }
 
 export type ActionSource = "proxy" | "claim";
@@ -168,6 +170,7 @@ function parseOpen(raw: unknown): OpenSession | null {
     timeZone: typeof record.timeZone === "string" ? record.timeZone : "UTC",
     repos: Array.isArray(record.repos) ? record.repos.filter((item): item is string => typeof item === "string") : [],
     warnings: Array.isArray(record.warnings) ? record.warnings.filter((item): item is string => typeof item === "string") : [],
+    ...(record.githubOptIn === true ? { githubOptIn: true } : {}),
   };
 }
 

@@ -11,6 +11,7 @@ export function buildReceipt(input: {
   checkedAt: string;
   timeZone: string;
   claims: ClaimInput[] | null;
+  githubOptIn?: boolean;
 }): Receipt {
   const diff = diffGitHub(input.before, input.after, input.checkedAt);
   const applied = input.claims === null
@@ -34,6 +35,7 @@ export function buildReceipt(input: {
       truncatedSnapshot: diff.truncatedSnapshot,
       truncatedChanges: diff.truncatedChanges,
       suppressedRemovals: diff.suppressedRemovals,
+      ...(input.githubOptIn ? { optIn: true } : {}),
     },
     counts,
     changes: applied.changes,

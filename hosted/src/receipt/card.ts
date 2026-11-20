@@ -1,4 +1,4 @@
-import { cardRows, countLine, countStory, type StoryLine } from "./story";
+import { cardRows, headlineFor, type StoryLine } from "./story";
 
 const PAPER: Rgb = [243, 239, 230];
 const INK: Rgb = [28, 25, 21];
@@ -113,7 +113,7 @@ export async function renderCardPng(lines: StoryLine[], title: string): Promise<
   fill(pixels, PAPER);
   rect(pixels, width, 0, 0, width, 64, MAST);
   drawText(pixels, width, 20, 22, title, MAST_INK);
-  drawText(pixels, width, 20, 78, countLine(countStory(lines)), INK);
+  drawText(pixels, width, 20, 78, headlineFor(lines, "Today"), INK);
   rows.forEach((row, index) => {
     const y = header + 16 + index * lineH;
     const color = hex(row.color);
@@ -147,6 +147,47 @@ function parseFont(source: string): Map<string, number[]> {
   return map;
 }
 
+const EXTRA: Record<string, number[]> = {
+  "\u201c": [0x06, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00],
+  "\u201d": [0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x06],
+  "\u2018": [0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00],
+  "\u2019": [0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x04],
+  "\u2014": [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
+  "\u2013": [0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00],
+  "\u2212": [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
+  "\u00b7": [0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00],
+  "\u2026": [0x00, 0x00, 0x00, 0x00, 0x00, 0x15, 0x00],
+};
+
+for (const [ch, rows] of Object.entries(EXTRA)) FONT.set(ch, rows);
+
+const FOLD: Record<string, string> = {
+  "\u00a0": " ",
+  "\u2010": "-",
+  "\u2011": "-",
+  "\u2012": "-",
+  "\u2015": "-",
+  "\u2022": "*",
+  "\u00ab": "\"",
+  "\u00bb": "\"",
+};
+
+/** Font key for a character. Empty means the character is skipped, never drawn as "?". */
+export function glyphKey(ch: string): string {
+  if (FONT.has(ch)) return ch;
+  const folded = FOLD[ch];
+  if (folded && FONT.has(folded)) return folded;
+  const lower = ch.toLowerCase();
+  if (FONT.has(lower)) return lower;
+  return "";
+}
+
+export function glyphRows(ch: string): number[] | null {
+  const key = glyphKey(ch);
+  if (!key) return null;
+  return FONT.get(key) ?? null;
+}
+
 function hex(value: string): Rgb {
   const match = /^#([0-9a-f]{6})$/i.exec(value);
   if (!match?.[1]) return INK;
@@ -177,12 +218,24 @@ function rect(pixels: Uint8Array, width: number, x: number, y: number, w: number
 }
 
 function drawText(pixels: Uint8Array, width: number, x: number, y: number, text: string, color: Rgb): void {
+  const advance = (GLYPH_W + 1) * SCALE;
+  const limit = width - 8 - advance * 3;
+  const chars = [...text];
   let cursor = x;
-  for (const ch of text) {
-    const glyph = FONT.get(ch) ?? FONT.get(ch.toLowerCase()) ?? FONT.get("?");
+  for (let index = 0; index < chars.length; index += 1) {
+    const ch = chars[index] ?? "";
+    if (cursor + advance > width - 8) break;
+    if (cursor > limit && index < chars.length - 1) {
+      for (const dot of "...") {
+        const mark = glyphRows(dot);
+        if (mark) blit(pixels, width, cursor, y, mark, color);
+        cursor += advance;
+      }
+      break;
+    }
+    const glyph = glyphRows(ch);
     if (glyph) blit(pixels, width, cursor, y, glyph, color);
-    cursor += (GLYPH_W + 1) * SCALE;
-    if (cursor > width - 8) break;
+    cursor += advance;
   }
 }
 

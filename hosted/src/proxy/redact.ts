@@ -1,5 +1,6 @@
 const SECRET_KEY = /token|secret|password|authorization|cookie|key/i;
-const PREFERRED_SUBJECTS = ["title", "name", "query", "q", "text", "message", "subject", "path", "repo", "reponame", "url", "question"];
+const PREFERRED_SUBJECTS = ["question", "title", "subject", "name", "query", "q", "text", "message", "prompt", "summary"];
+const LOW_VALUE = new Set(["repo", "owner", "reponame", "repository", "url", "uri", "id", "path", "type", "format", "model", "tool"]);
 
 export function redactValue(value: unknown, depth = 0): unknown {
   if (depth > 6) return "[truncated]";
@@ -34,8 +35,15 @@ export function pickSubject(value: unknown): string | undefined {
     const found = subjectAt(record, key);
     if (found) return found;
   }
+  for (const item of Object.values(record)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    for (const key of PREFERRED_SUBJECTS) {
+      const found = subjectAt(item as Record<string, unknown>, key);
+      if (found) return found;
+    }
+  }
   for (const [key, item] of Object.entries(record)) {
-    if (SECRET_KEY.test(key)) continue;
+    if (SECRET_KEY.test(key) || LOW_VALUE.has(key.toLowerCase())) continue;
     if (typeof item === "string" && item.trim() && item !== "[redacted]") return clip(item);
   }
   return undefined;

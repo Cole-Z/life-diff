@@ -49,8 +49,8 @@ export async function handleApp(request: Request, env: Env, ctx: ExecutionContex
     if (url.pathname === "/callback") return await callback(request, env);
     if (url.pathname === "/account") return await account(request, env);
     if (url.pathname === "/account/delete") return await deleteAccount(request, env);
-    if (url.pathname === "/settings" || url.pathname === "/settings/remove") return await handleSettings(request, env);
-    if (url.pathname === "/roundup" || url.pathname === "/roundup/card.png") return await handleRoundup(request, env);
+    if (url.pathname === "/settings" || url.pathname.startsWith("/settings/")) return await handleSettings(request, env);
+    if (url.pathname === "/roundup" || url.pathname.startsWith("/roundup/")) return await handleRoundup(request, env);
     if (url.pathname === "/privacy") return html(renderPrivacy());
     if (url.pathname === "/health") return Response.json({ ok: true });
     if (url.pathname === "/") return html(renderHome());

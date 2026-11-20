@@ -2,15 +2,17 @@ package lifediff
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
 // SchemaVersion is the receipt and snapshot document version.
 // Minor versions may add fields. Readers should ignore fields they do not know.
-const SchemaVersion = "1.0.0"
+const SchemaVersion = "1.1.0"
 
 // Version is the Life Diff library and CLI version.
-const Version = "0.1.0"
+// Release builds may override it with -X.
+var Version = "0.2.0"
 
 // Service is a connected account Life Diff knows how to read.
 type Service string
@@ -18,17 +20,25 @@ type Service string
 const (
 	ServiceCalendar Service = "calendar"
 	ServiceDrive    Service = "drive"
+	ServiceGmail    Service = "gmail"
 )
 
 // Display returns the word shown to people.
+// Service is an open set: a provider id that this package does not know
+// is shown with its first letter capitalized.
 func (s Service) Display() string {
 	switch s {
 	case ServiceCalendar:
 		return "Calendar"
 	case ServiceDrive:
 		return "Drive"
+	case ServiceGmail:
+		return "Gmail"
+	case "":
+		return ""
 	default:
-		panic(fmt.Sprintf("lifediff: unhandled service %q", s))
+		name := string(s)
+		return strings.ToUpper(name[:1]) + name[1:]
 	}
 }
 
@@ -141,7 +151,8 @@ type CalendarEvent struct {
 	Link        string    `json:"link,omitempty"`
 }
 
-// DriveFile is file metadata. Life Diff never stores file contents.
+// DriveFile is file metadata. Full read mode stores exported text separately,
+// on DriveSnapshot.Texts, not in this struct.
 type DriveFile struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name,omitempty"`
@@ -189,19 +200,21 @@ type CalendarSnapshot struct {
 
 // DriveSnapshot is the Drive half of a saved snapshot.
 type DriveSnapshot struct {
-	Checked        bool        `json:"checked"`
-	Query          string      `json:"query,omitempty"`
-	StartPageToken string      `json:"startPageToken,omitempty"`
-	Files          []DriveFile `json:"files"`
-	Truncated      bool        `json:"truncated,omitempty"`
+	Checked        bool                 `json:"checked"`
+	Query          string               `json:"query,omitempty"`
+	StartPageToken string               `json:"startPageToken,omitempty"`
+	Files          []DriveFile          `json:"files"`
+	Truncated      bool                 `json:"truncated,omitempty"`
+	Texts          map[string]DriveText `json:"texts,omitempty"`
 }
 
-// Snapshot is the local before-image. Google does not keep this history for us.
+// Snapshot is the local before-image. Services do not keep this history for us.
 type Snapshot struct {
 	SchemaVersion string           `json:"schemaVersion"`
 	ID            string           `json:"id"`
 	TakenAt       time.Time        `json:"takenAt"`
 	TimeZone      string           `json:"timeZone,omitempty"`
+	Providers     []ServiceState   `json:"providers,omitempty"`
 	Calendar      CalendarSnapshot `json:"calendar"`
 	Drive         DriveSnapshot    `json:"drive"`
 	Warnings      []string         `json:"warnings,omitempty"`
@@ -309,6 +322,7 @@ type Receipt struct {
 	ComparedAt    time.Time        `json:"comparedAt"`
 	TimeZone      string           `json:"timeZone,omitempty"`
 	Session       SessionWindow    `json:"session"`
+	Providers     []ProviderInfo   `json:"providers,omitempty"`
 	Calendar      *ReceiptCalendar `json:"calendar,omitempty"`
 	Drive         *ReceiptDrive    `json:"drive,omitempty"`
 	Counts        Counts           `json:"counts"`
@@ -325,12 +339,33 @@ type CalendarAfter struct {
 	Mode   string          `json:"mode"`
 }
 
+// DriveRevision is metadata for one Drive revision. It is not the file body.
+type DriveRevision struct {
+	ID           string    `json:"id"`
+	ModifiedTime time.Time `json:"modifiedTime,omitempty"`
+	Size         int64     `json:"size,omitempty"`
+	MD5          string    `json:"md5Checksum,omitempty"`
+}
+
+// DriveActivity is one read-only Drive Activity record.
+type DriveActivity struct {
+	FileID string    `json:"fileId"`
+	Time   time.Time `json:"time,omitempty"`
+	Action string    `json:"action,omitempty"`
+	Title  string    `json:"title,omitempty"`
+}
+
 // DriveAfter is the Drive read used as the "after" side.
 type DriveAfter struct {
-	Mode      string        `json:"mode"`
-	Changes   []DriveChange `json:"changes,omitempty"`
-	Files     []DriveFile   `json:"files,omitempty"`
-	Truncated bool          `json:"truncated,omitempty"`
+	Mode      string                     `json:"mode"`
+	Changes   []DriveChange              `json:"changes,omitempty"`
+	Files     []DriveFile                `json:"files,omitempty"`
+	Truncated bool                       `json:"truncated,omitempty"`
+	Revisions map[string][]DriveRevision `json:"revisions,omitempty"`
+	Activity  []DriveActivity            `json:"activity,omitempty"`
+	Texts     map[string]DriveText       `json:"texts,omitempty"`
+	// TextRead is true when full mode asked for file text on this read.
+	TextRead bool `json:"textRead,omitempty"`
 }
 
 // AfterState is a fresh read, already fetched, ready to compare with a snapshot.

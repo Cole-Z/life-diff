@@ -14,17 +14,26 @@ const (
 	defaultDriveQuery    = "trashed = false"
 )
 
-// Engine reads Calendar and Drive and turns those reads into snapshots and receipts.
+// Engine reads registered providers and turns those reads into snapshots and receipts.
 // It does not store them. Callers keep snapshots wherever they like.
+//
+// Providers is the list of services. When it is empty, Calendar and Drive are
+// wrapped with NewCalendarProvider and NewDriveProvider so existing callers
+// keep working. A new service is added by appending to Providers.
 type Engine struct {
-	Calendar CalendarReader
-	Drive    DriveReader
-	Now      func() time.Time
-	Location *time.Location
+	Providers []Provider
+	Calendar  CalendarReader
+	Drive     DriveReader
+	Now       func() time.Time
+	Location  *time.Location
 }
 
 // SnapshotOptions selects what a snapshot includes.
+// Only, when non-empty, is the explicit provider list. Otherwise Calendar,
+// Drive, and Extras choose among the registered providers.
 type SnapshotOptions struct {
+	Only          []string
+	Extras        bool
 	Calendar      bool
 	Drive         bool
 	CalendarID    string
@@ -56,75 +65,64 @@ func (e *Engine) location() *time.Location {
 	return time.Local
 }
 
-// TakeSnapshot reads the current Calendar window and Drive metadata.
+// TakeSnapshot reads each selected provider.
 func (e *Engine) TakeSnapshot(ctx context.Context, opt SnapshotOptions) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
-	opt = normalizeSnapshotOptions(opt, e.now())
-	if !opt.Calendar && !opt.Drive {
-		return Snapshot{}, fmt.Errorf("choose calendar, drive, or both")
+	now := e.now()
+	opt = normalizeSnapshotOptions(opt, now)
+	providers := e.active()
+	if len(providers) == 0 {
+		return Snapshot{}, fmt.Errorf("no providers are configured")
 	}
-	if opt.Calendar && e.Calendar == nil {
-		return Snapshot{}, fmt.Errorf("calendar reader is not configured")
+	ids, err := providerIDs(opt, providers)
+	if err != nil {
+		return Snapshot{}, err
 	}
-	if opt.Drive && e.Drive == nil {
-		return Snapshot{}, fmt.Errorf("drive reader is not configured")
-	}
-
 	snap := Snapshot{
 		SchemaVersion: SchemaVersion,
-		ID:            newID("snap", e.now()),
-		TakenAt:       e.now(),
+		ID:            newID("snap", now),
+		TakenAt:       now,
 		TimeZone:      e.location().String(),
-		Calendar:      CalendarSnapshot{Checked: opt.Calendar, Events: []CalendarEvent{}},
-		Drive:         DriveSnapshot{Checked: opt.Drive, Files: []DriveFile{}},
+		Calendar:      CalendarSnapshot{Checked: false, Events: []CalendarEvent{}},
+		Drive:         DriveSnapshot{Checked: false, Files: []DriveFile{}},
 	}
-
-	if opt.Calendar {
-		events, err := e.Calendar.ListWindow(ctx, opt.CalendarID, opt.WindowStart, opt.WindowEnd)
-		if err != nil {
-			return Snapshot{}, fmt.Errorf("read calendar: %w", err)
+	req := snapshotRequest(opt, e.location(), now)
+	ran := false
+	for _, id := range ids {
+		p := findProvider(providers, id)
+		if p == nil {
+			return Snapshot{}, fmt.Errorf("%s reader is not configured", id)
 		}
-		snap.Calendar.CalendarID = opt.CalendarID
-		snap.Calendar.WindowStart = opt.WindowStart.UTC()
-		snap.Calendar.WindowEnd = opt.WindowEnd.UTC()
-		snap.Calendar.Events = activeEvents(events)
-		if !opt.SkipSyncToken {
-			token, err := e.Calendar.CurrentSyncToken(ctx, opt.CalendarID)
-			if err != nil {
-				snap.Warnings = append(snap.Warnings, "Calendar did not provide a sync token. The next check will read the same time window again.")
-			} else {
-				snap.Calendar.SyncToken = token
-			}
+		ran = true
+		useLocation(p, e.location())
+		state, err := p.Snapshot(ctx, req)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if state.ID == "" {
+			state.ID = p.ID()
+		}
+		if state.DisplayName == "" {
+			state.DisplayName = p.DisplayName()
+		}
+		if state.TimeZone == "" {
+			state.TimeZone = e.location().String()
+		}
+		snap.Providers = append(snap.Providers, state)
+		snap.Warnings = append(snap.Warnings, state.Warnings...)
+		if proj, ok := p.(snapshotProjector); ok {
+			proj.ProjectSnapshot(&snap, state)
 		}
 	}
-
-	if opt.Drive {
-		token, err := e.Drive.StartPageToken(ctx)
-		if err != nil {
-			snap.Warnings = append(snap.Warnings, "Drive did not provide a changes token. The next check will list files again.")
-		} else {
-			snap.Drive.StartPageToken = token
-		}
-		listed, err := e.Drive.ListFiles(ctx, opt.DriveQuery, opt.MaxDriveFiles)
-		if err != nil {
-			return Snapshot{}, fmt.Errorf("read drive: %w", err)
-		}
-		snap.Drive.Query = opt.DriveQuery
-		snap.Drive.Files = listed.Files
-		snap.Drive.Truncated = listed.Truncated
-		if listed.Files == nil {
-			snap.Drive.Files = []DriveFile{}
-		}
-		if listed.Truncated {
-			snap.Warnings = append(snap.Warnings, fmt.Sprintf("Drive snapshot stopped at %d files. Later edits to older files still show up, without earlier details.", opt.MaxDriveFiles))
-		}
+	if !ran {
+		return Snapshot{}, fmt.Errorf("choose at least one provider")
 	}
 	return snap, nil
 }
 
-// Compare reads Google again and builds a receipt against snapshot.
+// Compare reads each provider in the snapshot again and builds a receipt.
 func (e *Engine) Compare(ctx context.Context, before Snapshot, opt CompareOptions) (Receipt, error) {
 	if err := ctx.Err(); err != nil {
 		return Receipt{}, err
@@ -132,92 +130,181 @@ func (e *Engine) Compare(ctx context.Context, before Snapshot, opt CompareOption
 	if before.ID == "" {
 		return Receipt{}, ErrNoSnapshot
 	}
-	after := AfterState{ObservedAt: e.now()}
-
-	if before.Calendar.Checked {
-		if e.Calendar == nil {
-			return Receipt{}, fmt.Errorf("calendar reader is not configured")
+	before = ensureProviderStates(before)
+	if len(before.Providers) == 0 {
+		return Receipt{}, fmt.Errorf("snapshot %s has no services to compare", before.ID)
+	}
+	providers := e.active()
+	now := e.now()
+	cc := CompareContext{
+		Session:  SessionWindow{StartedAt: before.TakenAt, CheckedAt: now},
+		Location: e.location(),
+	}
+	var outputs []ProviderOutput
+	var skipped []string
+	for _, state := range before.Providers {
+		if !state.Checked {
+			continue
 		}
-		events, mode, warn, err := e.readCalendar(ctx, before)
+		p := findProvider(providers, state.ID)
+		if p == nil {
+			name := state.DisplayName
+			if name == "" {
+				name = state.ID
+			}
+			skipped = append(skipped, name+" was in the snapshot, and this run does not have that provider.")
+			continue
+		}
+		useLocation(p, e.location())
+		current, err := p.ReadCurrent(ctx, state)
 		if err != nil {
 			return Receipt{}, err
 		}
-		after.Calendar = &CalendarAfter{Events: events, Mode: mode}
-		if warn != "" {
-			after.Warnings = append(after.Warnings, warn)
-		}
-	}
-	if before.Drive.Checked {
-		if e.Drive == nil {
-			return Receipt{}, fmt.Errorf("drive reader is not configured")
-		}
-		driveAfter, warn, err := e.readDrive(ctx, before)
+		out, err := p.BuildChanges(state, current, cc)
 		if err != nil {
 			return Receipt{}, err
 		}
-		after.Drive = &driveAfter
-		if warn != "" {
-			after.Warnings = append(after.Warnings, warn)
-		}
+		outputs = append(outputs, out)
 	}
-
-	return BuildReceipt(before, after, ReceiptOptions{
+	receipt := assembleReceipt(before, outputs, nil, ReceiptOptions{
 		ID:          opt.ReceiptID,
-		Now:         after.ObservedAt,
+		Now:         now,
 		Location:    e.location(),
 		Claims:      opt.Claims,
 		CheckClaims: opt.CheckClaims,
-	}), nil
+	})
+	if len(skipped) > 0 {
+		receipt.Warnings = compactStrings(append(skipped, receipt.Warnings...))
+	}
+	return receipt, nil
 }
 
-func (e *Engine) readCalendar(ctx context.Context, before Snapshot) ([]CalendarEvent, string, string, error) {
-	cal := before.Calendar
-	if cal.SyncToken != "" {
-		events, err := e.Calendar.ListSyncChanges(ctx, cal.CalendarID, cal.SyncToken)
-		if err == nil {
-			merged := applySync(cal.Events, events, cal.WindowStart, cal.WindowEnd, e.location())
-			return merged, CalendarDiffSync, "", nil
-		}
-		warn := "Calendar incremental sync failed (" + trimErr(err) + "). Life Diff read the same time window again."
-		events, werr := e.Calendar.ListWindow(ctx, cal.CalendarID, cal.WindowStart, cal.WindowEnd)
-		if werr != nil {
-			return nil, "", "", fmt.Errorf("read calendar: %w", werr)
-		}
-		return events, CalendarDiffWindow, warn, nil
-	}
-	events, err := e.Calendar.ListWindow(ctx, cal.CalendarID, cal.WindowStart, cal.WindowEnd)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("read calendar: %w", err)
-	}
-	return events, CalendarDiffWindow, "", nil
+type snapshotProjector interface {
+	ProjectSnapshot(dst *Snapshot, state ServiceState)
 }
 
-func (e *Engine) readDrive(ctx context.Context, before Snapshot) (DriveAfter, string, error) {
-	if before.Drive.StartPageToken != "" {
-		listed, err := e.Drive.ListChanges(ctx, before.Drive.StartPageToken)
+func (e *Engine) active() []Provider {
+	if e == nil {
+		return nil
+	}
+	if len(e.Providers) > 0 {
+		return e.Providers
+	}
+	var out []Provider
+	if e.Calendar != nil {
+		out = append(out, NewCalendarProvider(e.Calendar))
+	}
+	if e.Drive != nil {
+		out = append(out, NewDriveProvider(e.Drive))
+	}
+	return out
+}
+
+func providerIDs(opt SnapshotOptions, providers []Provider) ([]string, error) {
+	if len(opt.Only) > 0 {
+		return append([]string(nil), opt.Only...), nil
+	}
+	var ids []string
+	if opt.Calendar {
+		ids = append(ids, string(ServiceCalendar))
+	}
+	if opt.Drive {
+		ids = append(ids, string(ServiceDrive))
+	}
+	if opt.Extras {
+		for _, p := range providers {
+			if p.ID() == string(ServiceCalendar) || p.ID() == string(ServiceDrive) {
+				continue
+			}
+			ids = append(ids, p.ID())
+		}
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("choose at least one provider")
+	}
+	return ids, nil
+}
+
+type locationUser interface {
+	UseLocation(*time.Location)
+}
+
+func useLocation(p Provider, loc *time.Location) {
+	if u, ok := p.(locationUser); ok {
+		u.UseLocation(loc)
+	}
+}
+
+func findProvider(providers []Provider, id string) Provider {
+	for _, p := range providers {
+		if p.ID() == id {
+			return p
+		}
+	}
+	return nil
+}
+
+func snapshotRequest(opt SnapshotOptions, loc *time.Location, now time.Time) SnapshotRequest {
+	params := map[string]string{
+		"calendar_id": opt.CalendarID,
+	}
+	if !opt.WindowStart.IsZero() {
+		params["window_start"] = opt.WindowStart.UTC().Format(time.RFC3339)
+	}
+	if !opt.WindowEnd.IsZero() {
+		params["window_end"] = opt.WindowEnd.UTC().Format(time.RFC3339)
+	}
+	if opt.DriveQuery != "" {
+		params["drive_query"] = opt.DriveQuery
+	}
+	if opt.MaxDriveFiles > 0 {
+		params["max_drive_files"] = fmt.Sprintf("%d", opt.MaxDriveFiles)
+	}
+	if opt.SkipSyncToken {
+		params["skip_sync_token"] = "1"
+	}
+	return SnapshotRequest{Now: now, Location: loc, Params: params}
+}
+
+func ensureProviderStates(before Snapshot) Snapshot {
+	if len(before.Providers) > 0 {
+		return before
+	}
+	if before.Calendar.Checked {
+		payload, err := encodePayload(before.Calendar)
 		if err == nil {
-			return DriveAfter{
-				Mode:      DriveDiffChanges,
-				Changes:   listed.Changes,
-				Truncated: listed.Truncated,
-			}, "", nil
+			before.Providers = append(before.Providers, ServiceState{
+				ID:          string(ServiceCalendar),
+				DisplayName: ServiceCalendar.Display(),
+				Checked:     true,
+				TakenAt:     before.TakenAt,
+				TimeZone:    before.TimeZone,
+				Cursor:      before.Calendar.SyncToken,
+				ItemCount:   len(before.Calendar.Events),
+				Payload:     payload,
+			})
 		}
-		warn := "Drive changes feed failed (" + trimErr(err) + "). Life Diff listed files again."
-		files, ferr := e.Drive.ListFiles(ctx, before.Drive.Query, DefaultMaxDriveFiles)
-		if ferr != nil {
-			return DriveAfter{}, "", fmt.Errorf("read drive: %w", ferr)
+	}
+	if before.Drive.Checked {
+		payload, err := encodePayload(before.Drive)
+		if err == nil {
+			before.Providers = append(before.Providers, ServiceState{
+				ID:          string(ServiceDrive),
+				DisplayName: ServiceDrive.Display(),
+				Checked:     true,
+				TakenAt:     before.TakenAt,
+				TimeZone:    before.TimeZone,
+				Cursor:      before.Drive.StartPageToken,
+				ItemCount:   len(before.Drive.Files),
+				Payload:     payload,
+			})
 		}
-		return DriveAfter{Mode: DriveDiffList, Files: files.Files, Truncated: files.Truncated}, warn, nil
 	}
-	files, err := e.Drive.ListFiles(ctx, before.Drive.Query, DefaultMaxDriveFiles)
-	if err != nil {
-		return DriveAfter{}, "", fmt.Errorf("read drive: %w", err)
-	}
-	return DriveAfter{Mode: DriveDiffList, Files: files.Files, Truncated: files.Truncated}, "", nil
+	return before
 }
 
 func normalizeSnapshotOptions(opt SnapshotOptions, now time.Time) SnapshotOptions {
-	if !opt.Calendar && !opt.Drive {
+	if !opt.Calendar && !opt.Drive && len(opt.Only) == 0 && !opt.Extras {
 		opt.Calendar = true
 		opt.Drive = true
 	}

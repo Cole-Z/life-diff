@@ -36,45 +36,56 @@ func BuildReceipt(before Snapshot, after AfterState, opt ReceiptOptions) Receipt
 		id = newID("rcpt", now)
 	}
 
-	warnings := append([]string(nil), before.Warnings...)
-	warnings = append(warnings, after.Warnings...)
-
-	var changes []Change
-	var calInfo *ReceiptCalendar
-	var driveInfo *ReceiptDrive
-
+	var outputs []ProviderOutput
 	if before.Calendar.Checked {
-		if after.Calendar == nil {
-			warnings = append(warnings, "Calendar was not compared on this check.")
-		} else {
-			changes = append(changes, diffCalendar(before, after.Calendar.Events, loc)...)
-			calInfo = &ReceiptCalendar{
-				CalendarID:  before.Calendar.CalendarID,
-				WindowStart: before.Calendar.WindowStart,
-				WindowEnd:   before.Calendar.WindowEnd,
-				DiffMode:    after.Calendar.Mode,
-			}
-			if after.Calendar.Mode == CalendarDiffWindow {
-				warnings = append(warnings, "Calendar was compared by reading the same time window again. An event moved outside that window shows up as removed.")
-			}
-		}
+		outputs = append(outputs, calendarOutput(before.Calendar, after.Calendar, loc, nil))
 	}
 	if before.Drive.Checked {
-		if after.Drive == nil {
-			warnings = append(warnings, "Drive was not compared on this check.")
-		} else {
-			driveChanges, info := diffDrive(before, *after.Drive, loc)
-			changes = append(changes, driveChanges...)
-			driveInfo = info
-			if info != nil && info.SuppressedRemovals {
-				warnings = append(warnings, "The Drive file list was cut off, so this receipt does not treat missing files as removed.")
-			}
-			if info != nil && info.TruncatedChanges {
-				warnings = append(warnings, "Drive's change list was cut off. This receipt may be missing later changes.")
-			}
-			if after.Drive.Mode == DriveDiffList {
-				warnings = append(warnings, "Drive was compared by listing files again. A file that no longer matches the snapshot query shows up as removed.")
-			}
+		outputs = append(outputs, driveOutput(before.Drive, before.TakenAt, after.Drive, loc, nil))
+	}
+	opt.Now = now
+	opt.Location = loc
+	opt.ID = id
+	return assembleReceipt(before, outputs, after.Warnings, opt)
+}
+
+// assembleReceipt turns provider outputs into one receipt.
+// readWarnings are messages from the later read that are not already on an output.
+func assembleReceipt(before Snapshot, outputs []ProviderOutput, readWarnings []string, opt ReceiptOptions) Receipt {
+	now := opt.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	loc := opt.Location
+	if loc == nil {
+		loc = loadLocation(before.TimeZone)
+	}
+	id := opt.ID
+	if id == "" {
+		id = newID("rcpt", now)
+	}
+
+	warnings := append([]string(nil), before.Warnings...)
+	warnings = append(warnings, readWarnings...)
+
+	var changes []Change
+	var notes []string
+	var providers []ProviderInfo
+	var calInfo *ReceiptCalendar
+	var driveInfo *ReceiptDrive
+	for _, out := range outputs {
+		if out.Info.ID != "" {
+			providers = append(providers, out.Info)
+		}
+		changes = append(changes, out.Changes...)
+		notes = append(notes, out.Notes...)
+		warnings = append(warnings, out.Warnings...)
+		if out.Calendar != nil {
+			calInfo = out.Calendar
+		}
+		if out.Drive != nil {
+			driveInfo = out.Drive
 		}
 	}
 
@@ -115,12 +126,13 @@ func BuildReceipt(before Snapshot, after AfterState, opt ReceiptOptions) Receipt
 			StartedAt: sessionStart,
 			CheckedAt: now,
 		},
+		Providers:     providers,
 		Calendar:      calInfo,
 		Drive:         driveInfo,
 		Changes:       changes,
 		ClaimsChecked: opt.CheckClaims,
 		Claims:        []ClaimResult{},
-		Notes:         baseNotes(loc),
+		Notes:         append(baseNotes(loc), notes...),
 		Warnings:      compactStrings(warnings),
 	}
 	if opt.CheckClaims {
@@ -139,9 +151,8 @@ func baseNotes(loc *time.Location) []string {
 		zone = loc.String()
 	}
 	return []string{
-		"This receipt is from Google's records, not from what the agent said.",
-		"Life Diff only read data. It did not change Calendar or Drive.",
-		"Drive file contents are not downloaded. A content update means Drive saved a new version; the old and new text are not shown.",
+		"This receipt is from the services Life Diff read, not from what the agent said.",
+		"Life Diff only read data. It did not change the connected accounts.",
 		"Times are shown in " + zone + ".",
 	}
 }
@@ -181,6 +192,9 @@ func tally(r Receipt) Counts {
 func lessChange(a, b Change) bool {
 	if serviceOrder(a.Service) != serviceOrder(b.Service) {
 		return serviceOrder(a.Service) < serviceOrder(b.Service)
+	}
+	if a.Service != b.Service {
+		return a.Service < b.Service
 	}
 	if confidenceOrder(a.Confidence) != confidenceOrder(b.Confidence) {
 		return confidenceOrder(a.Confidence) < confidenceOrder(b.Confidence)
@@ -225,8 +239,12 @@ func serviceOrder(s Service) int {
 		return 0
 	case ServiceDrive:
 		return 1
+	case ServiceGmail:
+		return 2
 	default:
-		panic(fmt.Sprintf("lifediff: unhandled service %q", s))
+		// Service is an open set of provider ids. Unknown ids sort after
+		// the built-in ones, then by name in lessChange.
+		return 3
 	}
 }
 

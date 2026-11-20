@@ -1,11 +1,11 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "id": "rcpt_sample",
   "generatedAt": "2026-04-02T15:40:00Z",
   "readOnly": true,
   "producer": {
     "name": "lifediff",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "snapshot": {
     "id": "snap_sample",
@@ -17,6 +17,20 @@
     "startedAt": "2026-04-02T15:00:00Z",
     "checkedAt": "2026-04-02T15:40:00Z"
   },
+  "providers": [
+    {
+      "id": "calendar",
+      "displayName": "Calendar",
+      "diffMode": "sync",
+      "intro": "Events from Thu, Apr 2, 12:00 AM to Wed, Jul 1, 12:00 AM."
+    },
+    {
+      "id": "drive",
+      "displayName": "Drive",
+      "diffMode": "changes",
+      "intro": "File details compared with Drive's change history since the snapshot."
+    }
+  ],
   "calendar": {
     "calendarId": "primary",
     "windowStart": "2026-04-02T04:00:00Z",
@@ -72,7 +86,7 @@
       ],
       "occurredAt": "2026-04-02T15:10:00Z",
       "confidence": "high",
-      "confidenceReason": "Google saved this during the session, between the snapshot and this check.",
+      "confidenceReason": "The service recorded this during the session, between the snapshot and this check.",
       "claimStatus": "unclaimed",
       "link": "https://www.google.com/calendar/event?eid=pickup"
     },
@@ -105,7 +119,7 @@
       ],
       "occurredAt": "2026-04-02T15:20:00Z",
       "confidence": "high",
-      "confidenceReason": "Google saved this during the session, between the snapshot and this check.",
+      "confidenceReason": "The service recorded this during the session, between the snapshot and this check.",
       "claimStatus": "verified",
       "link": "https://www.google.com/calendar/event?eid=dentist"
     },
@@ -126,7 +140,7 @@
       ],
       "occurredAt": "2026-03-01T12:00:00Z",
       "confidence": "low",
-      "confidenceReason": "Google dates this before the snapshot, so it may not have been done in this session.",
+      "confidenceReason": "The service dates this before the snapshot, so it may not have been done in this session.",
       "claimStatus": "unclaimed"
     },
     {
@@ -135,7 +149,7 @@
       "kind": "modified",
       "resourceId": "file_vac",
       "resourceName": "Vacation ideas (final)",
-      "summary": "Renamed \"Vacation ideas\" to \"Vacation ideas (final)\". Updated the contents of \"Vacation ideas (final)\".",
+      "summary": "Renamed \"Vacation ideas\" to \"Vacation ideas (final)\". Updated the text of \"Vacation ideas (final)\": removed \"Launch TBD\" and added \"Launch in May\".",
       "fields": [
         {
           "field": "name",
@@ -148,11 +162,17 @@
           "label": "Contents",
           "before": "version 3, saved Wed, Apr 1, 8:00 AM",
           "after": "version 4, saved Thu, Apr 2, 11:25 AM"
+        },
+        {
+          "field": "text",
+          "label": "Text",
+          "before": "Lisbon\nTokyo\nLaunch TBD",
+          "after": "Lisbon\nTokyo\nLaunch in May"
         }
       ],
       "occurredAt": "2026-04-02T15:25:00Z",
       "confidence": "high",
-      "confidenceReason": "Google saved this during the session, between the snapshot and this check.",
+      "confidenceReason": "The service recorded this during the session, between the snapshot and this check.",
       "claimStatus": "unclaimed",
       "link": "https://docs.google.com/document/d/file_vac"
     },
@@ -166,7 +186,7 @@
       "fields": [],
       "occurredAt": "2026-04-02T15:30:00Z",
       "confidence": "high",
-      "confidenceReason": "Google saved this during the session, between the snapshot and this check.",
+      "confidenceReason": "The service recorded this during the session, between the snapshot and this check.",
       "claimStatus": "unclaimed"
     }
   ],
@@ -196,9 +216,9 @@
     }
   ],
   "notes": [
-    "This receipt is from Google's records, not from what the agent said.",
-    "Life Diff only read data. It did not change Calendar or Drive.",
-    "Drive file contents are not downloaded. A content update means Drive saved a new version; the old and new text are not shown.",
-    "Times are shown in America/New_York."
+    "This receipt is from the services Life Diff read, not from what the agent said.",
+    "Life Diff only read data. It did not change the connected accounts.",
+    "Times are shown in America/New_York.",
+    "Drive text is exported from Docs, Sheets, and Slides, or read from plain text files. Nothing is written back."
   ]
 }

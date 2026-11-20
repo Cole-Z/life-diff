@@ -2,8 +2,13 @@ package googleprov
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/url"
 	"sort"
+	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/Cole-Z/life-diff"
 )
@@ -194,3 +199,154 @@ type strError string
 func (e strError) Error() string { return string(e) }
 
 func errEmpty(msg string) error { return strError(msg) }
+
+// Revisions lists revision metadata. It never requests alt=media.
+func (d *Drive) Revisions(ctx context.Context, fileID string) ([]lifediff.DriveRevision, error) {
+	if fileID == "" {
+		return nil, errEmpty("drive revision file id")
+	}
+	q := url.Values{}
+	q.Set("pageSize", "20")
+	q.Set("fields", "revisions(id,modifiedTime,size,md5Checksum)")
+	var resp struct {
+		Revisions []struct {
+			ID           string    `json:"id"`
+			ModifiedTime string    `json:"modifiedTime"`
+			Size         flexInt64 `json:"size"`
+			MD5          string    `json:"md5Checksum"`
+		} `json:"revisions"`
+	}
+	path := "/drive/v3/files/" + url.PathEscape(fileID) + "/revisions"
+	if err := d.client().getJSON(ctx, path, q, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]lifediff.DriveRevision, 0, len(resp.Revisions))
+	for _, rev := range resp.Revisions {
+		item := lifediff.DriveRevision{ID: rev.ID, Size: int64(rev.Size), MD5: rev.MD5}
+		item.ModifiedTime, _ = parseGoogleTime(rev.ModifiedTime)
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+// ActivitySince reads the Drive Activity record since the given time.
+// The query is a metadata filter. File bodies are not part of this API.
+func (d *Drive) ActivitySince(ctx context.Context, since time.Time) ([]lifediff.DriveActivity, error) {
+	if since.IsZero() {
+		since = time.Now().UTC().Add(-24 * time.Hour)
+	}
+	body := map[string]any{
+		"filter":   fmt.Sprintf("time >= %d", since.UTC().UnixMilli()),
+		"pageSize": 50,
+	}
+	var resp struct {
+		Activities []struct {
+			PrimaryActionDetail map[string]json.RawMessage `json:"primaryActionDetail"`
+			Targets             []struct {
+				DriveItem struct {
+					Name  string `json:"name"`
+					Title string `json:"title"`
+				} `json:"driveItem"`
+			} `json:"targets"`
+			Timestamp string `json:"timestamp"`
+		} `json:"activities"`
+	}
+	if err := d.client().postJSON(ctx, "/driveactivity/v2/activity:query", body, &resp); err != nil {
+		return nil, err
+	}
+	var out []lifediff.DriveActivity
+	for _, act := range resp.Activities {
+		when, _ := parseGoogleTime(act.Timestamp)
+		action := activityAction(act.PrimaryActionDetail)
+		for _, target := range act.Targets {
+			id := strings.TrimPrefix(target.DriveItem.Name, "items/")
+			if id == "" {
+				continue
+			}
+			out = append(out, lifediff.DriveActivity{
+				FileID: id,
+				Time:   when,
+				Action: action,
+				Title:  target.DriveItem.Title,
+			})
+		}
+	}
+	return out, nil
+}
+
+const maxPlainDownload = 512 << 10
+
+// FileText reads text for a full-mode diff.
+// Docs and Slides are exported as text/plain. Sheets are exported as CSV.
+// Plain files are downloaded with alt=media. Other types are skipped.
+// This method only uses GET.
+func (d *Drive) FileText(ctx context.Context, file lifediff.DriveFile) (lifediff.DriveText, error) {
+	kind := lifediff.DriveTextKind(file.MimeType)
+	switch kind {
+	case "document", "presentation":
+		return d.exportText(ctx, file.ID, "text/plain", kind)
+	case "spreadsheet":
+		return d.exportText(ctx, file.ID, "text/csv", kind)
+	case "plain":
+		if file.Size > maxPlainDownload {
+			return lifediff.DriveText{Unavailable: "file is too large to download as text"}, nil
+		}
+		return d.downloadText(ctx, file.ID, kind)
+	default:
+		return lifediff.DriveText{Unavailable: "not a text file"}, nil
+	}
+}
+
+func (d *Drive) exportText(ctx context.Context, fileID, mime, kind string) (lifediff.DriveText, error) {
+	if fileID == "" {
+		return lifediff.DriveText{}, errEmpty("drive export file id")
+	}
+	q := url.Values{}
+	q.Set("mimeType", mime)
+	path := "/drive/v3/files/" + url.PathEscape(fileID) + "/export"
+	body, truncated, err := d.client().getBytes(ctx, path, q, lifediff.MaxDriveTextBytes)
+	if err != nil {
+		return lifediff.DriveText{}, err
+	}
+	return bytesToDriveText(body, truncated, kind)
+}
+
+func (d *Drive) downloadText(ctx context.Context, fileID, kind string) (lifediff.DriveText, error) {
+	if fileID == "" {
+		return lifediff.DriveText{}, errEmpty("drive download file id")
+	}
+	q := url.Values{}
+	q.Set("alt", "media")
+	q.Set("supportsAllDrives", "true")
+	path := "/drive/v3/files/" + url.PathEscape(fileID)
+	body, truncated, err := d.client().getBytes(ctx, path, q, lifediff.MaxDriveTextBytes)
+	if err != nil {
+		return lifediff.DriveText{}, err
+	}
+	return bytesToDriveText(body, truncated, kind)
+}
+
+func bytesToDriveText(body []byte, truncated bool, kind string) (lifediff.DriveText, error) {
+	if truncated {
+		for len(body) > 0 && !utf8.Valid(body) {
+			body = body[:len(body)-1]
+		}
+	}
+	if !utf8.Valid(body) {
+		return lifediff.DriveText{Unavailable: "not text"}, nil
+	}
+	return lifediff.DriveText{Text: string(body), Truncated: truncated, Kind: kind}, nil
+}
+
+func activityAction(detail map[string]json.RawMessage) string {
+	order := []string{"create", "edit", "rename", "move", "delete", "restore"}
+	for _, name := range order {
+		if _, ok := detail[name]; ok {
+			return name
+		}
+	}
+	for name := range detail {
+		return name
+	}
+	return ""
+}

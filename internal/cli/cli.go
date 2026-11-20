@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Cole-Z/life-diff"
@@ -18,7 +19,11 @@ import (
 )
 
 // ReaderFunc supplies the Calendar and Drive readers for a command.
+// A test that only needs those two services can keep using it.
 type ReaderFunc func(ctx context.Context, home string) (lifediff.CalendarReader, lifediff.DriveReader, error)
+
+// ProviderFunc supplies the providers for a command. When it is set, Readers is not used.
+type ProviderFunc func(ctx context.Context, home string) ([]lifediff.Provider, error)
 
 // Options overrides process defaults. Tests set them so they do not touch a real account.
 type Options struct {
@@ -26,6 +31,7 @@ type Options struct {
 	Now         func() time.Time
 	Location    *time.Location
 	Readers     ReaderFunc
+	Providers   ProviderFunc
 	OpenBrowser func(string) error
 	Env         map[string]string
 }
@@ -62,12 +68,12 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opt Optio
 	}
 }
 
-const usage = `Life Diff shows what an AI agent changed in Google Calendar and Drive.
+const usage = `Life Diff shows what an AI agent changed in the accounts it can read.
 It reads those services itself. It does not trust the agent's claim that the work is done.
 
 Usage:
-  lifediff auth [--credentials file] [--status]
-  lifediff snapshot [--from time] [--to time] [--calendar id] [--tz name] [--only calendar|drive]
+  lifediff auth [--access minimal|full] [--credentials file] [--status]
+  lifediff snapshot [--from time] [--to time] [--calendar id] [--tz name] [--only calendar,drive,gmail]
   lifediff diff [--snapshot id] [--claims file] [--html file] [--json file] [--strict]
   lifediff receipt [id]
   lifediff mcp
@@ -78,8 +84,10 @@ Times are RFC3339 or YYYY-MM-DD. Data stays on this computer under ~/.lifediff
 (or LIFEDIFF_HOME). Put the Google desktop OAuth client JSON at
 ~/.lifediff/credentials.json or set LIFEDIFF_CREDENTIALS.
 
-Personal use of your own desktop client does not need Google verification.
-The app is read-only: calendar.readonly and drive.metadata.readonly.
+The default sign-in is read-only: calendar.readonly and drive.metadata.readonly.
+lifediff auth --access full adds drive.readonly, drive.activity.readonly, and
+gmail.readonly. That works without Google verification only when each person
+uses their own OAuth client in Testing. The app still cannot write.
 `
 
 type app struct {
@@ -94,20 +102,27 @@ func (a *app) auth(args []string) int {
 	fs.SetOutput(a.stderr)
 	status := fs.Bool("status", false, "report whether a sign-in is saved, without printing it")
 	credFlag := fs.String("credentials", "", "path to the Google desktop client JSON")
+	accessFlag := fs.String("access", auth.AccessMinimal, "minimal or full read-only access")
 	if err := fs.Parse(args); err != nil {
 		return flagCode(err)
+	}
+	access, err := auth.ParseAccess(*accessFlag)
+	if err != nil {
+		return a.fail(err)
 	}
 	home, err := a.ensureHome()
 	if err != nil {
 		return a.fail(err)
 	}
 	tokenPath := filepath.Join(home, "token.json")
+	accessPath := filepath.Join(home, "access.json")
 	if *status {
 		if _, err := os.Stat(tokenPath); err != nil {
 			fmt.Fprintf(a.stdout, "No saved sign-in.\nLooked at %s\n", tokenPath)
 			return 1
 		}
 		fmt.Fprintf(a.stdout, "A saved sign-in is present.\nFile: %s\n", tokenPath)
+		fmt.Fprintf(a.stdout, "Access: %s\n", savedAccessLabel(accessPath))
 		return 0
 	}
 	credPath := *credFlag
@@ -122,13 +137,18 @@ func (a *app) auth(args []string) int {
 		return a.fail(err)
 	}
 	_ = os.Chmod(credPath, 0o600)
-	cfg, err := auth.ConfigFromCredentials(data)
+	cfg, err := auth.ConfigFromCredentialsWithAccess(data, access)
+	if err != nil {
+		return a.fail(err)
+	}
+	scopes, err := auth.Scopes(access)
 	if err != nil {
 		return a.fail(err)
 	}
 	tok, err := auth.Login(a.ctx, cfg, auth.LoginOptions{
 		Out:         a.stdout,
 		OpenBrowser: a.opt.OpenBrowser,
+		ScopeNote:   scopeNote(access, scopes),
 	})
 	if err != nil {
 		return a.fail(err)
@@ -136,8 +156,34 @@ func (a *app) auth(args []string) int {
 	if err := auth.SaveToken(tokenPath, tok); err != nil {
 		return a.fail(err)
 	}
-	fmt.Fprintf(a.stdout, "Saved a read-only sign-in for this computer.\nFile: %s\n", tokenPath)
+	if err := auth.SaveAccess(accessPath, access); err != nil {
+		return a.fail(err)
+	}
+	fmt.Fprintf(a.stdout, "Saved a read-only sign-in for this computer.\nAccess: %s\nFile: %s\n", access, tokenPath)
 	return 0
+}
+
+func scopeNote(access string, scopes []string) string {
+	var b strings.Builder
+	if access == auth.AccessFull {
+		b.WriteString("Open this link to allow a broader read-only sign-in (still no writes).")
+	} else {
+		b.WriteString("Open this link to allow read-only access to Calendar and Drive metadata.")
+	}
+	b.WriteString("\nScopes:")
+	for _, scope := range scopes {
+		b.WriteString("\n  ")
+		b.WriteString(scope)
+	}
+	return b.String()
+}
+
+func savedAccessLabel(path string) string {
+	rec, err := auth.LoadAccess(path)
+	if err != nil {
+		return auth.AccessMinimal + " (default; run lifediff auth --access full to add Drive text, Drive Activity, and Gmail)"
+	}
+	return rec.Access
 }
 
 func (a *app) snapshot(args []string) int {
@@ -146,7 +192,7 @@ func (a *app) snapshot(args []string) int {
 	from := fs.String("from", "", "window start (RFC3339 or YYYY-MM-DD)")
 	to := fs.String("to", "", "window end (RFC3339 or YYYY-MM-DD)")
 	calendarID := fs.String("calendar", "primary", "calendar id")
-	only := fs.String("only", "both", "calendar, drive, or both")
+	only := fs.String("only", "all", "all, or a comma-separated provider list such as calendar,drive,gmail")
 	tz := fs.String("tz", "", "IANA timezone for the report")
 	query := fs.String("drive-query", "", "Drive files.list query")
 	maxFiles := fs.Int("max-files", lifediff.DefaultMaxDriveFiles, "maximum Drive files to store")
@@ -157,7 +203,7 @@ func (a *app) snapshot(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	calOn, driveOn, err := parseOnly(*only)
+	sel, err := lifediff.ParseProviderList(*only)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -174,8 +220,10 @@ func (a *app) snapshot(args []string) int {
 		return a.fail(err)
 	}
 	snap, err := eng.TakeSnapshot(a.ctx, lifediff.SnapshotOptions{
-		Calendar:      calOn,
-		Drive:         driveOn,
+		Only:          sel.Only,
+		Extras:        sel.Extras,
+		Calendar:      sel.Calendar,
+		Drive:         sel.Drive,
 		CalendarID:    *calendarID,
 		WindowStart:   start,
 		WindowEnd:     end,
@@ -195,6 +243,12 @@ func (a *app) snapshot(args []string) int {
 	}
 	if snap.Drive.Checked {
 		fmt.Fprintf(a.stdout, "Drive files: %d\n", len(snap.Drive.Files))
+	}
+	for _, state := range snap.Providers {
+		if state.ID == string(lifediff.ServiceCalendar) || state.ID == string(lifediff.ServiceDrive) {
+			continue
+		}
+		fmt.Fprintf(a.stdout, "%s items: %d\n", state.DisplayName, state.ItemCount)
 	}
 	for _, w := range snap.Warnings {
 		fmt.Fprintf(a.stdout, "Note: %s\n", w)
@@ -389,48 +443,63 @@ func (a *app) engine(loc *time.Location) (*lifediff.Engine, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	var cal lifediff.CalendarReader
-	var drive lifediff.DriveReader
-	if a.opt.Readers != nil {
+	var providers []lifediff.Provider
+	switch {
+	case a.opt.Providers != nil:
+		providers, err = a.opt.Providers(a.ctx, home)
+	case a.opt.Readers != nil:
+		var cal lifediff.CalendarReader
+		var drive lifediff.DriveReader
 		cal, drive, err = a.opt.Readers(a.ctx, home)
-	} else {
-		cal, drive, err = googleReaders(a.ctx, home, a.getenv)
+		if err != nil {
+			return nil, "", err
+		}
+		if cal != nil {
+			providers = append(providers, lifediff.NewCalendarProvider(cal))
+		}
+		if drive != nil {
+			providers = append(providers, lifediff.NewDriveProvider(drive))
+		}
+	default:
+		providers, err = googleProviders(a.ctx, home, a.getenv)
 	}
 	if err != nil {
 		return nil, "", err
 	}
 	return &lifediff.Engine{
-		Calendar: cal,
-		Drive:    drive,
-		Now:      a.opt.Now,
-		Location: loc,
+		Providers: providers,
+		Now:       a.opt.Now,
+		Location:  loc,
 	}, home, nil
 }
 
-func googleReaders(ctx context.Context, home string, getenv func(string) string) (lifediff.CalendarReader, lifediff.DriveReader, error) {
+func googleProviders(ctx context.Context, home string, getenv func(string) string) ([]lifediff.Provider, error) {
 	credPath := credentialsPath(home, getenv)
 	data, err := os.ReadFile(credPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil, fmt.Errorf("no OAuth client file at %s. Save a desktop client JSON there, or set LIFEDIFF_CREDENTIALS", credPath)
+			return nil, fmt.Errorf("no OAuth client file at %s. Save a desktop client JSON there, or set LIFEDIFF_CREDENTIALS", credPath)
 		}
-		return nil, nil, err
+		return nil, err
 	}
 	_ = os.Chmod(credPath, 0o600)
-	cfg, err := auth.ConfigFromCredentials(data)
+	access := auth.AccessMinimal
+	if rec, err := auth.LoadAccess(filepath.Join(home, "access.json")); err == nil && rec.Access != "" {
+		access = rec.Access
+	}
+	cfg, err := auth.ConfigFromCredentialsWithAccess(data, access)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	tokenPath := filepath.Join(home, "token.json")
 	if _, err := os.Stat(tokenPath); errors.Is(err, os.ErrNotExist) {
-		return nil, nil, fmt.Errorf("not signed in. Run lifediff auth")
+		return nil, fmt.Errorf("not signed in. Run lifediff auth")
 	}
 	httpClient, err := auth.HTTPClient(ctx, cfg, tokenPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	client := googleprov.New(httpClient)
-	return &googleprov.Calendar{Client: client}, &googleprov.Drive{Client: client}, nil
+	return googleprov.Providers(httpClient, access), nil
 }
 
 func (a *app) ensureHome() (string, error) {
@@ -497,19 +566,6 @@ func flagCode(err error) int {
 		return 0
 	}
 	return 2
-}
-
-func parseOnly(s string) (bool, bool, error) {
-	switch s {
-	case "", "both":
-		return true, true, nil
-	case "calendar":
-		return true, false, nil
-	case "drive":
-		return false, true, nil
-	default:
-		return false, false, fmt.Errorf("unknown --only value %q (use calendar, drive, or both)", s)
-	}
 }
 
 func parseTime(s string, loc *time.Location) (time.Time, error) {

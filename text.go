@@ -60,6 +60,11 @@ func joinPeople(list []string) string {
 	return strings.Join(cp, ", ")
 }
 
+// ChangeID is the stable id providers should use for one change.
+func ChangeID(service Service, resourceID string, kind ChangeKind) string {
+	return changeID(service, resourceID, kind)
+}
+
 func changeID(service Service, resourceID string, kind ChangeKind) string {
 	sum := sha256.Sum256([]byte(string(service) + "\n" + resourceID + "\n" + string(kind)))
 	return "chg_" + hex.EncodeToString(sum[:6])
@@ -139,6 +144,9 @@ const (
 	fieldContent  = "content"
 	fieldType     = "type"
 	fieldDetails  = "details"
+	fieldActivity = "activity"
+	fieldRevision = "revision"
+	fieldText     = "text"
 )
 
 func fieldLabel(field string) string {
@@ -169,6 +177,12 @@ func fieldLabel(field string) string {
 		return "Type"
 	case fieldDetails:
 		return "Details"
+	case fieldActivity:
+		return "Activity"
+	case fieldRevision:
+		return "Revision"
+	case fieldText:
+		return "Text"
 	default:
 		return field
 	}

@@ -5,12 +5,15 @@ credentials.json
 client_secret*.json
 token.json
 **/token.json
+access.json
+**/access.json
 
 # Local snapshots and receipts.
 .lifediff/
 
 # Build output.
 /bin/
+/dist/
 *.exe
 *.test
 coverage.out

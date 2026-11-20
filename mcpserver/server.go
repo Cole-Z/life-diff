@@ -30,15 +30,15 @@ func NewServer(cfg Config) *mcp.Server {
 		Name:    "lifediff",
 		Version: lifediff.Version,
 	}, &mcp.ServerOptions{
-		Instructions: "Life Diff is read-only. Call snapshot before changing Google Calendar or Drive, diff afterward, and get_receipt to read a saved receipt. Do not ask the user for tokens or credentials.",
+		Instructions: "Life Diff is read-only. Call snapshot before the work, diff afterward, and get_receipt to read a saved receipt. Do not ask the user for tokens or credentials.",
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "snapshot",
-		Description: "Save a read-only snapshot of Google Calendar events in a time window and Google Drive file metadata. Run this before an agent changes the user's accounts.",
+		Description: "Save a read-only snapshot of the connected services (Calendar, Drive, and Gmail when the user signed in with full access). Run this before an agent changes the user's accounts.",
 	}, s.snapshot)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "diff",
-		Description: "Compare Google Calendar and Drive with the saved snapshot and return a receipt of added, removed, and modified items. Pass claims for what the agent says it did.",
+		Description: "Compare the connected services with the saved snapshot and return a receipt of added, removed, and modified items. Pass claims for what the agent says it did.",
 	}, s.diff)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_receipt",
@@ -56,7 +56,7 @@ type snapshotInput struct {
 	From       string `json:"from,omitempty" jsonschema:"window start as RFC3339 or YYYY-MM-DD; default is 24 hours ago"`
 	To         string `json:"to,omitempty" jsonschema:"window end as RFC3339 or YYYY-MM-DD; default is 90 days ahead"`
 	CalendarID string `json:"calendarId,omitempty" jsonschema:"calendar id, default primary"`
-	Only       string `json:"only,omitempty" jsonschema:"calendar, drive, or both"`
+	Only       string `json:"only,omitempty" jsonschema:"all, or a comma-separated list such as calendar,drive,gmail"`
 }
 
 type snapshotOutput struct {
@@ -209,7 +209,7 @@ func (s *service) loadSnapshot(id string) (lifediff.Snapshot, error) {
 }
 
 func snapshotOptions(in snapshotInput, loc *time.Location) (lifediff.SnapshotOptions, error) {
-	cal, drive, err := parseOnly(in.Only)
+	sel, err := lifediff.ParseProviderList(in.Only)
 	if err != nil {
 		return lifediff.SnapshotOptions{}, err
 	}
@@ -222,8 +222,10 @@ func snapshotOptions(in snapshotInput, loc *time.Location) (lifediff.SnapshotOpt
 		return lifediff.SnapshotOptions{}, err
 	}
 	return lifediff.SnapshotOptions{
-		Calendar:    cal,
-		Drive:       drive,
+		Only:        sel.Only,
+		Extras:      sel.Extras,
+		Calendar:    sel.Calendar,
+		Drive:       sel.Drive,
 		CalendarID:  in.CalendarID,
 		WindowStart: from,
 		WindowEnd:   to,
@@ -243,19 +245,6 @@ func normalizeClaims(in []lifediff.ClaimInput) ([]lifediff.ClaimInput, bool, err
 		return nil, false, err
 	}
 	return claims, true, nil
-}
-
-func parseOnly(s string) (calendar, drive bool, err error) {
-	switch s {
-	case "", "both":
-		return true, true, nil
-	case "calendar":
-		return true, false, nil
-	case "drive":
-		return false, true, nil
-	default:
-		return false, false, fmt.Errorf("unknown only value %q (use calendar, drive, or both)", s)
-	}
 }
 
 func parseTime(s string, loc *time.Location) (time.Time, error) {

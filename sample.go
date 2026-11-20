@@ -72,6 +72,8 @@ func SampleReceipt() Receipt {
 	vacationAfter.Name = "Vacation ideas (final)"
 	vacationAfter.Version = 4
 	vacationAfter.ModifiedTime = at("2026-04-02T15:25:00Z")
+	vacationText := DriveText{Text: "Lisbon\nTokyo\nLaunch TBD\n", Kind: "document"}
+	vacationTextAfter := DriveText{Text: "Lisbon\nTokyo\nLaunch in May\n", Kind: "document"}
 
 	oldDraft := DriveFile{
 		ID:           "file_old",
@@ -100,6 +102,7 @@ func SampleReceipt() Receipt {
 			Query:          "trashed = false",
 			StartPageToken: "drive-token-sample",
 			Files:          []DriveFile{folder, vacationBefore, oldDraft},
+			Texts:          map[string]DriveText{"file_vac": vacationText},
 		},
 	}
 	after := AfterState{
@@ -114,6 +117,8 @@ func SampleReceipt() Receipt {
 				{FileID: "file_vac", Time: vacationAfter.ModifiedTime, File: &vacationAfter},
 				{FileID: "file_old", Removed: true, Time: at("2026-04-02T15:30:00Z")},
 			},
+			Texts:    map[string]DriveText{"file_vac": vacationTextAfter},
+			TextRead: true,
 		},
 	}
 	return BuildReceipt(before, after, ReceiptOptions{

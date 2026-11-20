@@ -25,6 +25,50 @@ func TestRedact(t *testing.T) {
 	}
 }
 
+func TestFullScopesAreReadOnly(t *testing.T) {
+	b, err := os.ReadFile("testdata/credentials.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ConfigFromCredentialsWithAccess(b, AccessFull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, scope := range cfg.Scopes {
+		got[scope] = true
+		if strings.Contains(scope, "gmail.modify") || strings.Contains(scope, "gmail.compose") || strings.Contains(scope, "gmail.insert") || strings.Contains(scope, "gmail.metadata") || scope == "https://mail.google.com/" {
+			t.Fatal(scope)
+		}
+		if scope == "https://www.googleapis.com/auth/drive" || scope == "https://www.googleapis.com/auth/drive.activity" || scope == "https://www.googleapis.com/auth/calendar" {
+			t.Fatal(scope)
+		}
+	}
+	for _, want := range []string{ScopeCalendarReadonly, ScopeDriveReadonly, ScopeDriveActivityReadonly, ScopeGmailReadonly} {
+		if !got[want] {
+			t.Fatalf("missing %s in %v", want, cfg.Scopes)
+		}
+	}
+	if got[ScopeDriveMetadataReadonly] {
+		t.Fatal("full access should use drive.readonly instead of drive.metadata.readonly")
+	}
+	path := filepath.Join(t.TempDir(), "access.json")
+	if err := SaveAccess(path, AccessFull); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %o", info.Mode().Perm())
+	}
+	loaded, err := LoadAccess(path)
+	if err != nil || loaded.Access != AccessFull || len(loaded.Scopes) != 4 {
+		t.Fatalf("%+v %v", loaded, err)
+	}
+}
+
 func TestScopesAreReadOnly(t *testing.T) {
 	b, err := os.ReadFile("testdata/credentials.json")
 	if err != nil {

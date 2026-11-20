@@ -4,6 +4,7 @@ import { oauthServer, handleApp, AuthServer } from "./auth/worker";
 import { SCOPES } from "./constants";
 import type { AuthProps, Env } from "./env";
 import { handleData } from "./http/data";
+import { renderMcpBrowserPage } from "./http/pages";
 import { classify } from "./http/routes";
 import { createLifeDiffServer } from "./mcp/server";
 import { sessionSweeper } from "./app/runtime";
@@ -17,7 +18,11 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const kind = classify(new URL(request.url).pathname);
     if (kind === "mcp" || kind === "resource-metadata") {
-      return resourceServer(env).fetch(request, env, ctx);
+      const response = await resourceServer(env).fetch(request, env, ctx);
+      if (kind === "mcp" && request.method === "GET" && response.status === 401 && !hasBearer(request)) {
+        return mcpBrowserPage(response, env.MCP_SERVER_URL);
+      }
+      return response;
     }
     if (kind === "data") return handleData(request, env);
     return handleApp(request, env, ctx);
@@ -58,6 +63,17 @@ function resourceServer(env: Env): OAuthResourceServer<Env, AuthProps> {
       },
     },
   });
+}
+
+function hasBearer(request: Request): boolean {
+  return /^Bearer\s+\S+/i.test(request.headers.get("authorization") ?? "");
+}
+
+function mcpBrowserPage(response: Response, endpoint: string): Response {
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  headers.set("content-type", "text/html; charset=utf-8");
+  return new Response(renderMcpBrowserPage(endpoint), { status: 401, statusText: response.statusText, headers });
 }
 
 async function runCron(env: Env, now: Date): Promise<void> {

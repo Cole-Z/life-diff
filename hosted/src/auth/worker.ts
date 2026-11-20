@@ -4,6 +4,7 @@ import {
   OAuthAuthorizationServer,
   authorizationErrorRedirect,
 } from "@cloudflare/workers-oauth-provider";
+import { bindFetch } from "../bind-fetch";
 import { SCOPES } from "../constants";
 import { clearSessionCookieHeader, readCookie, readSession, sessionCookieHeader, signSession } from "../crypto/cookie";
 import { codeChallengeS256, randomVerifier } from "../crypto/pkce";
@@ -107,14 +108,15 @@ async function callback(request: Request, env: Env): Promise<Response> {
   }
   const code = url.searchParams.get("code");
   if (!code || !resumed.data?.verifier) return new Response("GitHub did not return a code", { status: 400 });
-  const tokens = await exchangeGithubCode(fetch, {
+  const githubFetch = bindFetch();
+  const tokens = await exchangeGithubCode(githubFetch, {
     clientId: env.GITHUB_APP_CLIENT_ID,
     clientSecret: env.GITHUB_APP_CLIENT_SECRET,
     code,
     redirectUri: new URL("/callback", request.url).toString(),
     codeVerifier: resumed.data.verifier,
   });
-  const profile = await fetchGithubProfile(fetch, tokens.accessToken);
+  const profile = await fetchGithubProfile(githubFetch, tokens.accessToken);
   const props = authProps(profile);
   const now = new Date();
   const meta = new D1MetadataStore(env.DB);

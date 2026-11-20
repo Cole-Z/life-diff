@@ -1,3 +1,4 @@
+import { bindFetch } from "../bind-fetch";
 import { decryptString, encryptString } from "../crypto/aesgcm";
 import { refreshGithubToken } from "./oauth";
 import type { CredentialRow, MetadataStore } from "../storage/types";
@@ -22,7 +23,7 @@ export async function loadAccessToken(input: {
   const refreshToken = await decryptString(input.key, row.refreshTokenEnc);
   let refreshed;
   try {
-    refreshed = await refreshGithubToken(input.fetchImpl ?? fetch, {
+    refreshed = await refreshGithubToken(bindFetch(input.fetchImpl ?? globalThis.fetch), {
       clientId: input.clientId,
       clientSecret: input.clientSecret,
       refreshToken,

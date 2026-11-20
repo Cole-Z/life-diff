@@ -60,6 +60,11 @@ export function renderDeleted(): string {
     <p>Uninstall the Life Diff GitHub App from your GitHub settings if you do not want it installed.</p>`);
 }
 
+export function renderMcpBrowserPage(endpoint: string): string {
+  return layout("Life Diff MCP", `<h1>This is the Life Diff MCP endpoint</h1>
+    <p>Add <code>${escapeHtml(endpoint)}</code> as a remote MCP server in an MCP client.</p>`);
+}
+
 export function renderSignedOut(): string {
   return layout("Account", `<h1>Account</h1>
     <p>Sign in from an MCP client first. Life Diff sets a browser session when GitHub sends you back, and this page uses that session.</p>`);

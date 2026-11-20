@@ -1,3 +1,5 @@
+import { bindFetch } from "../bind-fetch";
+
 export interface GitHubTokenSet {
   accessToken: string;
   refreshToken?: string;
@@ -66,7 +68,7 @@ export async function refreshGithubToken(fetchImpl: typeof fetch, input: {
 }
 
 export async function fetchGithubProfile(fetchImpl: typeof fetch, accessToken: string): Promise<GitHubProfile> {
-  const response = await fetchImpl("https://api.github.com/user", {
+  const response = await bindFetch(fetchImpl)("https://api.github.com/user", {
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${accessToken}`,
@@ -83,7 +85,7 @@ export async function fetchGithubProfile(fetchImpl: typeof fetch, accessToken: s
 }
 
 async function tokenRequest(fetchImpl: typeof fetch, body: Record<string, string>): Promise<GitHubTokenSet> {
-  const response = await fetchImpl("https://github.com/login/oauth/access_token", {
+  const response = await bindFetch(fetchImpl)("https://github.com/login/oauth/access_token", {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify(body),

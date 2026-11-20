@@ -1,3 +1,4 @@
+import { bindFetch } from "../bind-fetch";
 import { asArray, asRecord, parseBranch, parseComment, parseCommit, parseCompareFile, parseInstallation, parseIssue, parsePull, parseRepo } from "./parse";
 import type { BranchSnap, CommentActivity, CommitActivity, FileActivity, GitHubApi, InstallationRef, IssueSnap, PullSnap, RepoRef } from "./types";
 
@@ -17,7 +18,7 @@ export class GitHubClient implements GitHubApi {
 
   constructor(options: GitHubClientOptions) {
     this.token = options.token;
-    this.fetchImpl = options.fetch ?? fetch;
+    this.fetchImpl = bindFetch(options.fetch ?? globalThis.fetch);
     this.userAgent = options.userAgent ?? "life-diff";
   }
 

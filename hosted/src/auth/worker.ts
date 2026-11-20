@@ -13,8 +13,12 @@ import { sealCredentials } from "../github/tokens";
 import { D1MetadataStore, R2ObjectStore } from "../storage/d1";
 import { deleteUserData } from "../storage/retention";
 import { revokeAllGrants } from "./grants";
-import { renderAccount, renderConsentPage, renderDeleted, renderHome, renderPrivacy, renderSignedOut } from "../http/pages";
-import { sessionSweeper } from "../app/runtime";
+import { renderAccount, renderConsentPage, renderDeleted, renderHome, renderNoSession, renderPrivacy, renderSettings, renderSignedOut } from "../http/pages";
+import { coreDeps, sessionSweeper } from "../app/runtime";
+import { AppError, listReceipts, toReceiptActions } from "../app/service";
+import { receiptForActions } from "../receipt/build";
+import { renderHtml } from "../receipt/html";
+import { addUpstream, listUpstreamPublic, removeUpstream } from "../proxy/registry";
 
 const SESSION_SECONDS = 7 * 24 * 60 * 60;
 
@@ -45,6 +49,9 @@ export async function handleApp(request: Request, env: Env, ctx: ExecutionContex
     if (url.pathname === "/callback") return await callback(request, env);
     if (url.pathname === "/account") return await account(request, env);
     if (url.pathname === "/account/delete") return await deleteAccount(request, env);
+    if (url.pathname === "/settings") return await settings(request, env);
+    if (url.pathname === "/settings/remove") return await removeSettings(request, env);
+    if (url.pathname === "/session") return await sessionPage(request, env);
     if (url.pathname === "/privacy") return html(renderPrivacy());
     if (url.pathname === "/health") return Response.json({ ok: true });
     if (url.pathname === "/") return html(renderHome());
@@ -166,6 +173,75 @@ export async function eraseUser(env: Env, userId: string): Promise<void> {
     userId,
   });
   await revokeAllGrants(oauthServer(env).getOAuthApi(env), userId);
+}
+
+async function settings(request: Request, env: Env): Promise<Response> {
+  const session = await currentSession(request, env);
+  if (!session) return html(renderSignedOut(), 401);
+  const meta = new D1MetadataStore(env.DB);
+  if (request.method === "GET") {
+    const upstreams = await listUpstreamPublic(meta, session.sub);
+    return html(renderSettings(session.login, session.csrf, upstreams));
+  }
+  if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
+  const form = await request.formData();
+  if (form.get("csrf") !== session.csrf) return new Response("The form did not match this session.", { status: 400 });
+  try {
+    await addUpstream(meta, env.TOKEN_ENCRYPTION_KEY, session.sub, new Date(), {
+      name: String(form.get("name") ?? ""),
+      url: String(form.get("url") ?? ""),
+      token: String(form.get("token") ?? ""),
+    });
+  } catch (error) {
+    const message = error instanceof AppError ? error.message : "Could not save that server.";
+    const upstreams = await listUpstreamPublic(meta, session.sub);
+    return html(renderSettings(session.login, session.csrf, upstreams, message), 400);
+  }
+  return Response.redirect(new URL("/settings", request.url).toString(), 303);
+}
+
+async function removeSettings(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
+  const session = await currentSession(request, env);
+  if (!session) return html(renderSignedOut(), 401);
+  const form = await request.formData();
+  if (form.get("csrf") !== session.csrf) return new Response("The form did not match this session.", { status: 400 });
+  try {
+    await removeUpstream(new D1MetadataStore(env.DB), session.sub, String(form.get("name") ?? ""));
+  } catch (error) {
+    const message = error instanceof AppError ? error.message : "Could not remove that server.";
+    const upstreams = await listUpstreamPublic(new D1MetadataStore(env.DB), session.sub);
+    return html(renderSettings(session.login, session.csrf, upstreams, message), 400);
+  }
+  return Response.redirect(new URL("/settings", request.url).toString(), 303);
+}
+
+async function sessionPage(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
+  const session = await currentSession(request, env);
+  if (!session) return html(renderSignedOut(), 401);
+  const deps = coreDeps(env, { userId: session.sub, login: session.login });
+  const open = await deps.sessions.getOpen();
+  if (!open) {
+    const receipts = await listReceipts(deps, 1);
+    const latest = receipts[0];
+    if (latest) return Response.redirect(new URL(`/receipts/${latest.id}`, request.url).toString(), 302);
+    return html(renderNoSession());
+  }
+  const logged = await deps.sessions.list(open.id);
+  const page = receiptForActions({
+    id: open.id,
+    startedAt: open.startedAt,
+    checkedAt: new Date().toISOString(),
+    timeZone: open.timeZone,
+    actions: toReceiptActions(logged),
+    pendingGitHub: open.recordingOnly === true,
+  });
+  return html(renderHtml(page));
+}
+
+export async function browserSession(request: Request, env: Env) {
+  return currentSession(request, env);
 }
 
 async function currentSession(request: Request, env: Env) {

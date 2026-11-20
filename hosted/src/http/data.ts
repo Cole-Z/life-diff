@@ -1,6 +1,7 @@
 import { coreDeps } from "../app/runtime";
 import { AppError, getReceipt, logAction } from "../app/service";
-import { eraseUser, oauthServer } from "../auth/worker";
+import { browserSession, eraseUser, oauthServer } from "../auth/worker";
+import { SCOPES } from "../constants";
 import type { Env } from "../env";
 
 export async function handleData(request: Request, env: Env): Promise<Response> {
@@ -48,7 +49,13 @@ async function requireUser(request: Request, env: Env): Promise<{ userId: string
   const header = request.headers.get("authorization") ?? "";
   const match = /^Bearer\s+(\S+)$/i.exec(header);
   const token = match?.[1];
-  if (!token) return new Response("Sign in required", { status: 401 });
+  if (!token) {
+    if (request.method === "GET") {
+      const session = await browserSession(request, env);
+      if (session) return { userId: session.sub, login: session.login, scope: [...SCOPES] };
+    }
+    return new Response("Sign in required", { status: 401 });
+  }
   const validated = env.AUTH_SERVER
     ? await env.AUTH_SERVER.validateToken(env.MCP_SERVER_URL, token)
     : await oauthServer(env).validateToken(env.MCP_SERVER_URL, token, env);

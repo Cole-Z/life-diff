@@ -1,11 +1,13 @@
 ---
 name: life-diff
-description: Verify what an agent changed in the user's accounts by snapshotting before the work and diffing after. Use when a task may create, edit, move, or delete Google Calendar events, Drive files, or Gmail messages, or when the user wants proof of what an agent actually changed. Present the Life Diff receipt, not the agent's own "done".
+description: Record every tool call an agent makes through Life Diff and show one receipt. Use when connecting https://lifediff.dev/mcp, registering upstream MCP servers, wrapping a local server with lifediff proxy, or when a task may change Google Calendar, Drive, or Gmail and the user wants proof. Present the receipt, not the agent's own "done".
 ---
 
 # Life Diff
 
-Life Diff reads the user's accounts itself and compares them with a snapshot taken before the work. The receipt is the record. An agent's message that the work is done is a claim, not proof.
+Life Diff writes one receipt of the tool calls that went through it. On the hosted server, add `https://lifediff.dev/mcp`, register other MCP servers with `add_upstream` or at `https://lifediff.dev/settings`, and open `https://lifediff.dev/session` or the receipt from `end_session`. A line marked reported by the proxy is a forwarded call. A line marked verified from service history was read from GitHub, or from Google in the local command. Calls that bypass Life Diff are not on the receipt.
+
+The local command also reads the user's Google accounts itself and compares them with a snapshot taken before the work. The receipt is the record. An agent's message that the work is done is a claim, not proof. `lifediff proxy --name <service> -- <command> [args]` wraps one stdio MCP server and `lifediff receipt` prints what it saw.
 
 The default sign-in reads Google Calendar and Drive file metadata. `lifediff auth --access full` also reads Drive activity, Drive revision metadata, the text of Docs, Sheets, Slides, and plain files, and Gmail subject, recipients, labels, and snippet. It still cannot create, edit, delete, or send anything. Message bodies are not requested. Snapshots stay in `~/.lifediff` with mode `0600`.
 

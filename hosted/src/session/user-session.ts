@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
-import { SessionBook, type LoggedAction, type NewAction, type OpenSession } from "./book";
+import { SessionBook, type LoggedAction, type NewAction, type OpenSession, type SnapshotPatch } from "./book";
 
 /** One Durable Object per GitHub user. Holds the open session and its action log. */
 export class UserSession extends DurableObject<Env> {
@@ -24,6 +24,13 @@ export class UserSession extends DurableObject<Env> {
 
   async list(sessionId: string): Promise<LoggedAction[]> {
     return (await this.load()).list(sessionId);
+  }
+
+  async attach(sessionId: string, patch: SnapshotPatch): Promise<OpenSession> {
+    const book = await this.load();
+    const updated = book.attach(sessionId, patch);
+    await this.save(book);
+    return updated;
   }
 
   async close(sessionId: string): Promise<void> {

@@ -1,6 +1,6 @@
 # Hosted Life Diff
 
-Hosted Life Diff is a Cloudflare Worker. It signs a person in with a GitHub App, snapshots the repositories that app is installed on, and writes a read-only receipt of what changed during an agent session. An MCP client talks to Life Diff. Life Diff talks to GitHub. The GitHub token never goes to the client.
+Hosted Life Diff is a Cloudflare Worker. An agent connects to `https://lifediff.dev/mcp`. Life Diff forwards the other MCP servers that person registered, records every forwarded call, and writes one receipt. GitHub remains a check against repository history: the GitHub token stays on the Worker, and the receipt labels those lines verified from service history. Proxy lines are labeled reported by the proxy.
 
 This service does not use Google. Calendar and Drive stay in the self-run command, where each person brings their own OAuth client.
 
@@ -59,11 +59,14 @@ MCP_SERVER_URL=http://localhost:8787/mcp
 
 MCP tools, all of which require the scopes `receipts:read` and `sessions:write`:
 
-- `start_session` takes a snapshot. A second snapshot is refused while a session is open.
-- `end_session` re-reads GitHub, diffs the window, and stores a receipt.
+- `start_session` takes a GitHub snapshot. A second snapshot is refused while a session is open, unless that session was opened only to record forwarded calls. In that case the snapshot is attached and the calls stay.
+- `end_session` re-reads GitHub, diffs the window, and stores a receipt. Forwarded tool calls are on that receipt.
 - `get_receipt` returns a stored receipt. Pass `includeHtml` for the HTML report.
-- `log_action` records a claimed action. Life Diff does not run the tool.
+- `log_action` records a claimed action. Life Diff does not run the tool. This is separate from calls the proxy forwards.
 - `list_receipts` lists receipt metadata.
+- `add_upstream`, `list_upstreams`, and `remove_upstream` register streamable-HTTP MCP servers. A token is optional, stored encrypted, and never returned. Their tools are exposed as `<name>__<tool>` and each forwarded call is recorded.
+
+The settings page is `https://lifediff.dev/settings`. The open session is `https://lifediff.dev/session`. A public no-auth server that answers `tools/list` is `https://docs.mcp.cloudflare.com/mcp`.
 
 The same action log is available as `POST /v1/sessions/:id/actions` with the Life Diff bearer token. `DELETE /v1/me` deletes the account. Signed-in browsers can use `POST /account/delete` (the account page includes a CSRF token).
 
@@ -80,7 +83,7 @@ The HTML report uses the same labels and colors as the core report: Added `#0f5c
 | Store | Holds |
 | --- | --- |
 | Durable Object `UserSession` (one per GitHub user id) | Open session and the action log |
-| D1 | User, encrypted GitHub credential, installation ids, session and receipt metadata |
+| D1 | User, encrypted GitHub credential, installation ids, encrypted upstream tokens, session and receipt metadata |
 | R2 `life-diff-receipts` | Snapshot JSON, receipt JSON, receipt HTML |
 | KV `OAUTH_KV` | MCP grants and tokens issued by Life Diff |
 

@@ -1,65 +1,68 @@
-# Action log: `lifediff mcp-proxy`
+# Action log
 
-This is a design. `lifediff mcp-proxy` is not implemented. The command does not exist yet. The receipt schema does not have an `actions` array yet.
+Life Diff records tool calls that an agent sends through it. A recorded call is **reported by the proxy**. It is not, by itself, proof that an account changed. Where a service exposes history, Life Diff still reads that history and labels the result **verified from service history**. GitHub is that check on the hosted service. Google Calendar, Drive, and Gmail are that check in the local command.
 
-## Why
+Two proxies are implemented.
 
-Life Diff reads the accounts themselves. That is the record of what changed. It does not know which agent tool call asked for the change. An agent can say it updated a doc, and the receipt can show the doc changed, without a link between the two.
+## Hosted proxy
 
-A pass-through MCP proxy can record the tool calls the agent made during the session and attach them to the receipt as **claimed** actions. Claimed means "the agent invoked this tool." It does not mean the account changed, and it does not mean the tool call succeeded at doing what the agent intended. Provider diffs stay the source of truth. The action log is a second list next to them.
+`https://lifediff.dev/mcp` is the MCP server. A signed-in user registers upstream streamable-HTTP MCP servers, on [https://lifediff.dev/settings](https://lifediff.dev/settings) or with the tools `add_upstream`, `list_upstreams`, and `remove_upstream`.
 
-## Command
+Each upstream is a name, an https URL, and an optional token. The token may be a bearer token or a single header such as `X-Api-Key: value`. It is encrypted with the same AES-GCM `TOKEN_ENCRYPTION_KEY` as the GitHub token and stored in D1. It is not returned by `list_upstreams`, not rendered on the settings page, and not written into the receipt.
+
+`tools/list` on `/mcp` includes the five Life Diff tools, the three upstream tools, and every upstream tool under the name `<upstream>__<tool>`. `tools/call` on a namespaced tool is forwarded. The agent receives the upstream result, or a short error if the upstream fails. A redirect is not followed.
+
+Every forwarded call is appended to the open session. If none is open, Life Diff opens a recording session. The stored fields are the time, upstream, tool, redacted arguments, a one-line summary, ok or error, duration, and a read/write class:
+
+| Tool name contains | Class | Receipt color |
+| --- | --- | --- |
+| `create`, `add` | write | green |
+| `update`, `move`, `write`, `post`, `edit`, `patch` | write | amber |
+| `delete`, `remove`, `send` | write | red |
+| `get`, `list`, `search`, `read`, `fetch` | read | gray |
+| anything else | unknown | neutral |
+
+The first matching write verb wins, so `get_or_create` is a write. Reads are collapsed on the receipt. Writes are listed first, grouped by upstream. Argument keys that split into `token`, `secret`, `password`, `authorization`, or `key` are stored as `[redacted]`.
+
+`start_session` still snapshots GitHub. If the open session was only recording calls, `start_session` keeps those calls and attaches the snapshot. `end_session` diffs GitHub when a snapshot exists and writes one receipt that contains both the proxy lines and the GitHub lines. `log_action` is unchanged: it is still a claim the agent states, and it is still checked against GitHub. Forwarded calls are not turned into those claims.
+
+The open session is also at `https://lifediff.dev/session` for the browser that signed in. A stored receipt at `/receipts/<id>` accepts that browser session or a Life Diff bearer token.
+
+## Local stdio proxy
 
 ```bash
-lifediff mcp-proxy --config ~/.lifediff/proxy.json
+lifediff proxy [--name service] -- <command> [args]
 ```
 
-The process speaks MCP on stdin and stdout, the same way `lifediff mcp` does. The agent is configured to talk to `lifediff mcp-proxy` instead of talking to each upstream server directly. The proxy forwards every message to the upstream servers named in the config and forwards their responses back. It does not add tools of its own except an optional `lifediff_actions` read that returns the log for the current process.
+The process speaks MCP on stdin and stdout. It starts `<command>` and copies each JSON-RPC message through without changing the bytes. `tools/call` responses are appended to `~/.lifediff/actions/<session>.jsonl` (mode `0600`). The directory is mode `0700`. `LIFEDIFF_HOME` overrides the directory, as it does for the rest of the local command.
+
+`lifediff receipt` prints those lines and writes HTML with the same colors. It still prints a Google receipt when one exists.
+
+Claude Desktop or Cursor:
 
 ```json
 {
-  "session": "auto",
-  "upstreams": [
-    {
-      "name": "drive",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-gdrive"]
-    },
-    {
-      "name": "calendar",
-      "command": "calendar-mcp"
+  "mcpServers": {
+    "docs": {
+      "command": "/absolute/path/to/lifediff",
+      "args": ["proxy", "--name", "docs", "--", "npx", "-y", "some-mcp-server"]
     }
-  ]
+  }
 }
 ```
 
-`session` `auto` uses the latest Life Diff snapshot id if one exists, otherwise an id created at proxy start. The log file is `~/.lifediff/actions/<session>.jsonl`, mode `0600`. The directory is mode `0700`. Override the directory with `LIFEDIFF_HOME`, same as the rest of Life Diff.
+The local proxy does not sign in to the upstream. The wrapped command keeps its own credentials. Life Diff does not put those credentials in the log. A failed log write is reported on stderr. Stdout stays the MCP stream.
 
-The proxy does not sign in to Google and does not widen scopes. Upstream servers keep their own credentials. Life Diff still uses the read-only token from `lifediff auth`.
+## What a recorded line is not
 
-## What is logged
+- It is not proof the side effect landed. The tool can return success and the account can be unchanged. The GitHub or Google section is the check, and only for those services.
+- It is missing when the agent called a server that was not registered, or was not the command behind `lifediff proxy`.
+- It does not undo anything.
+- The read/write color is a guess from the tool name. A tool named `search` that writes would be shown in gray.
 
-For each MCP `tools/call` request the proxy appends one JSON line after the upstream responds:
+## Receipt field
 
-| Field | Meaning |
-| --- | --- |
-| `time` | RFC3339 time the response came back. |
-| `upstream` | Name from the config. |
-| `tool` | Tool name. |
-| `arguments` | Arguments after redaction. |
-| `ok` | `true` when the upstream result is not an error. |
-| `status` | Always `claimed` in this design. |
-| `summary` | One short sentence, such as `drive.create_file "Q2 goals"`. |
-
-Redaction runs before the line is written. Strip values whose keys look like tokens, secrets, passwords, authorization headers, cookies, or refresh tokens. Replace them with `[redacted]`. Do not write the upstream process environment. Do not write file bodies; if an argument is longer than a few kilobytes, store its length and a hash prefix instead of the text.
-
-The proxy does not block the call, rewrite the arguments, or retry. If the log write fails, the proxy still returns the upstream result and prints a single warning on its own log, not on stdout. Stdout is the MCP stream.
-
-Initialize, list-tools, and cancelled calls can be logged at debug level. They are not claimed actions. Only `tools/call` becomes a claimed action.
-
-## How it meets the receipt
-
-`lifediff diff` gains an optional `--actions <session>` flag, defaulting to the action log whose session id matches the snapshot. When that file exists, the receipt includes:
+Hosted receipts stay schema `1.0.0`. They add an `actions` array. Readers that do not know the field ignore it.
 
 ```json
 {
@@ -67,32 +70,19 @@ Initialize, list-tools, and cancelled calls can be logged at debug level. They a
     {
       "id": "act_1",
       "time": "2026-04-02T15:12:00Z",
-      "upstream": "drive",
-      "tool": "create_file",
-      "summary": "drive.create_file \"Q2 goals\"",
-      "status": "claimed",
-      "ok": true
+      "upstream": "docs",
+      "tool": "search_cloudflare_documentation",
+      "arguments": { "query": "Durable Objects" },
+      "ok": true,
+      "summary": "Looked up \"Durable Objects\" in Docs.",
+      "durationMs": 180,
+      "effect": "read",
+      "tone": "read",
+      "source": "proxy",
+      "resultSummary": "A Durable Object keeps state."
     }
   ]
 }
 ```
 
-`status` is `claimed`. That word is not `verified`, `missing`, or `unclaimed`. Those three stay on provider changes and on the claims file. A claimed action is the agent saying, through a tool call, that it tried something.
-
-The HTML report gets a section, "Claimed actions", under the provider sections. Each row is the summary, the time, and whether the tool result was an error. The section intro says these lines are tool calls, not account changes.
-
-A later version can match an action to a provider change (for example a Drive `create_file` whose argument equals a new file name) and set a `matchedChangeIds` field. This design does not do that matching. Until it exists, the report must not describe a claimed action as verified.
-
-`lifediff diff --claims` is unchanged. The claims file is still what the agent says in its own words. The action log is what the proxy saw. Both can be present. Neither replaces the provider diff.
-
-## Failure and trust
-
-- The proxy is local. It does not send the log anywhere.
-- A missing upstream is an error to the agent, not a silent skip.
-- The log is not proof that the tool's side effect landed. A tool can return success and the account can be unchanged. The receipt already shows that case: the action is claimed, and the provider section has no matching change.
-- An agent that talks to an upstream directly, bypassing the proxy, produces no claimed action. The provider diff still runs.
-- Undo stays out of this design. The proxy does not add a write path.
-
-## Not in this change
-
-No `mcp-proxy` subcommand, no JSONL writer, no receipt field, no report section. The next implementation should add those behind the same read-only rules: local files mode `0600`, redaction tests, and a fake upstream MCP server instead of a live one.
+`source` is `proxy`. That is not `verified`, `missing`, or `unclaimed`. Those three stay on GitHub changes and on claims from `log_action`.

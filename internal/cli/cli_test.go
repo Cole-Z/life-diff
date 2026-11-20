@@ -144,6 +144,45 @@ func TestUsageAndMissingSnapshot(t *testing.T) {
 	}
 }
 
+func TestProxyUsageAndActionReceipt(t *testing.T) {
+	home := t.TempDir()
+	opt := Options{Home: home, Env: map[string]string{}}
+	var stdout, stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"proxy"}, &stdout, &stderr, opt); code != 2 {
+		t.Fatalf("proxy usage %d %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "lifediff proxy") {
+		t.Fatal(stderr.String())
+	}
+	dir := filepath.Join(home, "actions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"time":"2026-04-02T15:00:00Z","upstream":"docs","tool":"search_docs","arguments":{"query":"Workers"},"ok":true,"summary":"Looked up \"Workers\" in Docs.","durationMs":12,"effect":"read","tone":"read","source":"proxy","resultSummary":"Workers run code."}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "ses_test.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "latest"), []byte("ses_test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	htmlPath := filepath.Join(home, "out.html")
+	if code := Run(context.Background(), []string{"receipt", "--html", htmlPath}, &stdout, &stderr, opt); code != 0 {
+		t.Fatalf("receipt %d %s %s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `Looked up "Workers" in Docs.`) {
+		t.Fatal(stdout.String())
+	}
+	html, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(html, []byte("#0f5c32")) || !bytes.Contains(html, []byte("Reported by proxy")) || !bytes.Contains(html, []byte("badge-read")) {
+		t.Fatalf("%s", html)
+	}
+}
+
 type memCal struct {
 	window  []lifediff.CalendarEvent
 	token   string

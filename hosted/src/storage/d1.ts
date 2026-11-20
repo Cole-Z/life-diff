@@ -9,6 +9,7 @@ import type {
   ReceiptMeta,
   ReceiptRow,
   SessionRow,
+  UpstreamRow,
 } from "./types";
 
 interface SqlStatement {
@@ -122,6 +123,7 @@ export class D1MetadataStore implements MetadataStore {
   async deleteUserRows(userId: string): Promise<void> {
     await this.db.prepare(`DELETE FROM receipts WHERE user_id = ?`).bind(userId).run();
     await this.db.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
+    await this.db.prepare(`DELETE FROM upstreams WHERE user_id = ?`).bind(userId).run();
     await this.db.prepare(`DELETE FROM installations WHERE user_id = ?`).bind(userId).run();
     await this.db.prepare(`DELETE FROM github_credentials WHERE user_id = ?`).bind(userId).run();
     await this.db.prepare(`DELETE FROM users WHERE id = ?`).bind(userId).run();
@@ -168,6 +170,34 @@ export class D1MetadataStore implements MetadataStore {
   async deleteSessions(ids: string[]): Promise<void> {
     for (const id of ids) await this.db.prepare(`DELETE FROM sessions WHERE id = ?`).bind(id).run();
   }
+
+  async listUpstreams(userId: string): Promise<UpstreamRow[]> {
+    const rows = await this.db.prepare(
+      `SELECT id, user_id, name, url, token_enc, created_at FROM upstreams WHERE user_id = ? ORDER BY created_at`,
+    ).bind(userId).all<UpstreamSql>();
+    return rows.results.map(upstreamRow);
+  }
+
+  async insertUpstream(row: UpstreamRow): Promise<void> {
+    await this.db.prepare(
+      `INSERT INTO upstreams (id, user_id, name, url, token_enc, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(row.id, row.userId, row.name, row.url, row.tokenEnc ?? null, row.createdAt).run();
+  }
+
+  async deleteUpstream(userId: string, name: string): Promise<boolean> {
+    const existing = await this.db.prepare(
+      `SELECT id FROM upstreams WHERE user_id = ? AND name = ?`,
+    ).bind(userId, name).first<{ id: string }>();
+    if (!existing) return false;
+    await this.db.prepare(`DELETE FROM upstreams WHERE user_id = ? AND name = ?`).bind(userId, name).run();
+    return true;
+  }
+
+  async attachSession(input: { id: string; snapshotId: string; snapshotKey: string; snapshotExpiresAt: string; repoCount: number }): Promise<void> {
+    await this.db.prepare(
+      `UPDATE sessions SET snapshot_id = ?, snapshot_r2_key = ?, snapshot_expires_at = ?, repo_count = ? WHERE id = ?`,
+    ).bind(input.snapshotId, input.snapshotKey, input.snapshotExpiresAt, input.repoCount, input.id).run();
+  }
 }
 
 export class R2ObjectStore implements ObjectStore {
@@ -196,6 +226,26 @@ interface CredentialSql {
   access_expires_at: string | null;
   refresh_expires_at: string | null;
   updated_at: string;
+}
+
+interface UpstreamSql {
+  id: string;
+  user_id: string;
+  name: string;
+  url: string;
+  token_enc: string | null;
+  created_at: string;
+}
+
+function upstreamRow(row: UpstreamSql): UpstreamRow {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    url: row.url,
+    createdAt: row.created_at,
+    ...(row.token_enc ? { tokenEnc: row.token_enc } : {}),
+  };
 }
 
 interface ReceiptSql {

@@ -1,3 +1,5 @@
+import type { ActionTone, ToolEffect } from "../proxy/classify";
+
 export type ChangeKind = "added" | "removed" | "modified";
 export type Confidence = "high" | "medium" | "low";
 export type ClaimStatus = "verified" | "missing" | "unclaimed";
@@ -73,6 +75,22 @@ export interface ReceiptGitHub {
   suppressedRemovals: boolean;
 }
 
+export interface ReceiptAction {
+  id: string;
+  time: string;
+  upstream: string;
+  tool: string;
+  arguments: unknown;
+  ok: boolean;
+  summary: string;
+  error?: string;
+  durationMs: number;
+  effect: ToolEffect;
+  tone: ActionTone;
+  source: "proxy";
+  resultSummary?: string;
+}
+
 export interface Counts {
   added: number;
   removed: number;
@@ -97,6 +115,8 @@ export interface Receipt {
   changes: Change[];
   claimsChecked: boolean;
   claims: ClaimResult[];
+  /** Tool calls forwarded by the Life Diff proxy. Readers of schema 1.0.0 ignore unknown fields. */
+  actions?: ReceiptAction[];
   notes: string[];
   warnings?: string[];
 }

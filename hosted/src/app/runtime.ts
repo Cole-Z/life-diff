@@ -21,6 +21,7 @@ export function sessionPort(env: Env, userId: string): SessionPort {
     start: (session) => stub.start(session),
     log: (sessionId, action) => stub.log(sessionId, action),
     list: (sessionId) => stub.list(sessionId),
+    attach: (sessionId, patch) => stub.attach(sessionId, patch),
     close: (sessionId) => stub.close(sessionId),
   };
 }

@@ -10,7 +10,8 @@ For a person who installs the GitHub App and signs in:
 - The GitHub user-to-server access token and refresh token, encrypted with AES-GCM. The key is a Worker secret and is not stored next to the token.
 - GitHub App installation ids and the account login GitHub returns with them.
 - A session snapshot of repository metadata: branch names and commit ids, pull request and issue titles and labels, and later the commits, comments, and file paths that changed. File bodies and patches are not stored. A file change is recorded as a line count such as `+10 −2`.
-- An action log of what an agent claimed it did (`log_action` or `POST /v1/sessions/:id/actions`). Life Diff does not run those tools.
+- MCP servers you register: a name, an https URL, and, when you provide one, a token encrypted with the same AES-GCM key. The token is not returned to the agent or shown on the settings page.
+- An action log of tool calls Life Diff forwarded, with arguments redacted, plus claims an agent logged (`log_action` or `POST /v1/sessions/:id/actions`). The forwarded call is sent to the upstream you registered. Life Diff does not otherwise run those tools.
 - Receipt JSON and the HTML report, in object storage, plus counts and expiry in the database.
 - MCP access grants issued by Life Diff. A grant records the GitHub user id and login only. It does not contain the GitHub token. MCP clients receive a Life Diff token, not the GitHub token.
 
@@ -40,4 +41,6 @@ Deletion removes the user row, the encrypted GitHub token, installation ids, ses
 
 ## Who can read it
 
-The person who authorized the app, and MCP clients they approve, can read their receipts and log actions on their open session. Receipt HTML is served only with that person's Life Diff token. Tokens are checked against the resource `https://lifediff.dev/mcp`.
+The person who authorized the app, and MCP clients they approve, can read their receipts and log actions on their open session. Receipt HTML is served to that person's Life Diff token, and to the browser session set when GitHub sent them back to Life Diff. Tokens are checked against the resource `https://lifediff.dev/mcp`.
+
+Deleting the account also deletes registered upstreams and their encrypted tokens.

@@ -74,6 +74,31 @@ export interface AbandonedSession {
   snapshotKey: string | null;
 }
 
+export interface UpstreamRow {
+  id: string;
+  userId: string;
+  name: string;
+  url: string;
+  tokenEnc?: string;
+  createdAt: string;
+}
+
+export interface UpstreamPublic {
+  id: string;
+  name: string;
+  url: string;
+  hasToken: boolean;
+  createdAt: string;
+}
+
+export interface UpstreamSecret {
+  name: string;
+  url: string;
+  createdAt: string;
+  token?: string;
+  tokenUnreadable?: boolean;
+}
+
 export interface MetadataStore {
   upsertUser(user: { id: string; login: string; now: string }): Promise<void>;
   saveCredentials(row: CredentialRow): Promise<void>;
@@ -92,6 +117,10 @@ export interface MetadataStore {
   clearSnapshots(sessionIds: string[]): Promise<void>;
   abandonedSessions(nowIso: string, limit: number): Promise<AbandonedSession[]>;
   deleteSessions(ids: string[]): Promise<void>;
+  listUpstreams(userId: string): Promise<UpstreamRow[]>;
+  insertUpstream(row: UpstreamRow): Promise<void>;
+  deleteUpstream(userId: string, name: string): Promise<boolean>;
+  attachSession(input: { id: string; snapshotId: string; snapshotKey: string; snapshotExpiresAt: string; repoCount: number }): Promise<void>;
 }
 
 export interface ObjectStore {

@@ -9,6 +9,7 @@ import type {
   ReceiptMeta,
   ReceiptRow,
   SessionRow,
+  UpstreamRow,
 } from "./types";
 
 export class MemoryMetadataStore implements MetadataStore {
@@ -17,6 +18,7 @@ export class MemoryMetadataStore implements MetadataStore {
   installations = new Map<string, InstallationRow[]>();
   sessions = new Map<string, SessionRow>();
   receipts = new Map<string, ReceiptRow>();
+  upstreams = new Map<string, UpstreamRow>();
 
   async upsertUser(user: { id: string; login: string; now: string }): Promise<void> {
     const existing = this.users.get(user.id);
@@ -89,6 +91,7 @@ export class MemoryMetadataStore implements MetadataStore {
     this.installations.delete(userId);
     for (const [id, session] of this.sessions) if (session.userId === userId) this.sessions.delete(id);
     for (const [id, receipt] of this.receipts) if (receipt.userId === userId) this.receipts.delete(id);
+    for (const [id, upstream] of this.upstreams) if (upstream.userId === userId) this.upstreams.delete(id);
   }
 
   async expiredReceipts(nowIso: string, limit: number): Promise<ExpiredReceipt[]> {
@@ -125,6 +128,30 @@ export class MemoryMetadataStore implements MetadataStore {
 
   async deleteSessions(ids: string[]): Promise<void> {
     for (const id of ids) this.sessions.delete(id);
+  }
+
+  async listUpstreams(userId: string): Promise<UpstreamRow[]> {
+    return [...this.upstreams.values()]
+      .filter((row) => row.userId === userId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map((row) => ({ ...row }));
+  }
+
+  async insertUpstream(row: UpstreamRow): Promise<void> {
+    this.upstreams.set(`${row.userId}\n${row.name}`, { ...row });
+  }
+
+  async deleteUpstream(userId: string, name: string): Promise<boolean> {
+    return this.upstreams.delete(`${userId}\n${name}`);
+  }
+
+  async attachSession(input: { id: string; snapshotId: string; snapshotKey: string; snapshotExpiresAt: string; repoCount: number }): Promise<void> {
+    const row = this.sessions.get(input.id);
+    if (!row) return;
+    row.snapshotId = input.snapshotId;
+    row.snapshotKey = input.snapshotKey;
+    row.snapshotExpiresAt = input.snapshotExpiresAt;
+    row.repoCount = input.repoCount;
   }
 }
 

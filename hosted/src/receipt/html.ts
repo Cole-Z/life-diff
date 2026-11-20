@@ -1,5 +1,7 @@
 import { assertNever, escapeHtml, formatInstant } from "../text";
-import type { Change, ClaimResult, FieldChange, Receipt } from "./types";
+import { serviceLabel } from "../proxy/summary";
+import type { ActionTone } from "../proxy/classify";
+import type { Change, ClaimResult, FieldChange, Receipt, ReceiptAction } from "./types";
 
 const ICON_ADDED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7 1h2v14H7zM1 7h14v2H1z"/></svg>`;
 const ICON_REMOVED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 7h14v2H1z"/></svg>`;
@@ -35,6 +37,8 @@ export function renderHtml(receipt: Receipt): string {
     --modified-bg: #fff6e4;
     --neutral: #3f3a33;
     --neutral-bg: #efeae1;
+    --read: #5c564c;
+    --read-bg: #ece7de;
     --focus: #1e3a32;
   }
   @media (prefers-color-scheme: dark) {
@@ -54,6 +58,8 @@ export function renderHtml(receipt: Receipt): string {
       --modified-bg: #3a2c14;
       --neutral: #f4efe6;
       --neutral-bg: #2a251f;
+      --read: #c2b8a8;
+      --read-bg: #2a251f;
       --focus: #f0cb86;
     }
   }
@@ -85,6 +91,8 @@ export function renderHtml(receipt: Receipt): string {
   .badge-added { background: var(--added-bg); color: var(--added); }
   .badge-removed { background: var(--removed-bg); color: var(--removed); }
   .badge-modified { background: var(--modified-bg); color: var(--modified); }
+  .badge-read { background: var(--read-bg); color: var(--read); }
+  .badge-unknown { background: var(--neutral-bg); color: var(--neutral); }
   .tag { background: var(--neutral-bg); color: var(--neutral); font-weight: 600; }
   section { margin-top: 28px; }
   h2 { font-family: Georgia, Palatino, serif; font-size: 26px; margin: 0 0 4px; }
@@ -100,6 +108,18 @@ export function renderHtml(receipt: Receipt): string {
   article.is-added { border-left-color: var(--added); }
   article.is-removed { border-left-color: var(--removed); }
   article.is-modified { border-left-color: var(--modified); }
+  article.is-read { border-left-color: var(--read); }
+  article.is-unknown { border-left-color: var(--neutral); }
+  details.reads, details.more { margin: 8px 0 16px; }
+  details.more summary, details.reads summary { cursor: pointer; color: var(--muted); }
+  pre.args {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--neutral-bg);
+    border-radius: 8px;
+    padding: 8px;
+    font-size: 13px;
+  }
   .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
   h3 { font-family: Georgia, Palatino, serif; font-size: 20px; line-height: 1.35; font-weight: 600; margin: 0 0 10px; }
   .fields { display: grid; gap: 8px; margin: 0 0 8px; }
@@ -130,20 +150,22 @@ export function renderHtml(receipt: Receipt): string {
 <header class="mast">
   <div class="wrap">
     <p class="word">Life Diff</p>
-    <p class="lede">A read-only receipt of what changed on GitHub during this session.</p>
+    <p class="lede">One receipt of what the agent did. Gray is a lookup. Green, amber, and red are changes.</p>
     <p class="session">${session}</p>
     <p class="headline">${escapeHtml(headline)}</p>
     <div class="legend" aria-label="Legend">
-      <span class="badge badge-added">${ICON_ADDED} Added</span>
-      <span class="badge badge-removed">${ICON_REMOVED} Removed</span>
-      <span class="badge badge-modified">${ICON_MODIFIED} Modified</span>
+      <span class="badge badge-added">${ICON_ADDED} Created</span>
+      <span class="badge badge-modified">${ICON_MODIFIED} Changed</span>
+      <span class="badge badge-removed">${ICON_REMOVED} Deleted</span>
+      <span class="badge badge-read">Read</span>
     </div>
   </div>
 </header>
 <main>
+  ${renderProxy(receipt)}
   <section>
     <h2>GitHub</h2>
-    <p class="intro">Repositories compared with the snapshot: ${escapeHtml(repos)}.</p>
+    <p class="intro">Verified from service history. Repositories compared with the snapshot: ${escapeHtml(repos)}.</p>
     ${receipt.changes.length === 0 ? `<p class="empty">Nothing changed in the repositories Life Diff could read.</p>` : receipt.changes.map(renderChange).join("")}
   </section>
   ${renderClaims(receipt)}
@@ -159,6 +181,87 @@ export function renderHtml(receipt: Receipt): string {
 `;
 }
 
+function renderProxy(receipt: Receipt): string {
+  const actions = receipt.actions;
+  if (!actions) return "";
+  if (actions.length === 0) {
+    return `<section><h2>Tool calls</h2><p class="intro">Reported by the proxy.</p><p class="empty">No tool calls were reported by the proxy during this session.</p></section>`;
+  }
+  const groups = new Map<string, ReceiptAction[]>();
+  for (const action of actions) {
+    const list = groups.get(action.upstream) ?? [];
+    list.push(action);
+    groups.set(action.upstream, list);
+  }
+  return [...groups.entries()].map(([upstream, items]) => {
+    const writes = items.filter((item) => item.tone !== "read");
+    const reads = items.filter((item) => item.tone === "read");
+    const readBody = reads.length === 0 ? "" : `<details class="reads"><summary>${reads.length} lookup${reads.length === 1 ? "" : "s"}</summary>${reads.map((item) => renderAction(item, receipt.timeZone)).join("")}</details>`;
+    return `<section>
+      <h2>${escapeHtml(serviceLabel(upstream))}</h2>
+      <p class="intro">Reported by the proxy. These are calls Life Diff forwarded to ${escapeHtml(serviceLabel(upstream))}. They are not a history ${escapeHtml(serviceLabel(upstream))} confirmed.</p>
+      ${writes.length === 0 ? `<p class="empty">No changes recorded.</p>` : writes.map((item) => renderAction(item, receipt.timeZone)).join("")}
+      ${readBody}
+    </section>`;
+  }).join("");
+}
+
+function renderAction(action: ReceiptAction, timeZone: string): string {
+  const tone = toneClass(action.tone);
+  const when = escapeHtml(formatInstant(action.time, timeZone));
+  const status = action.ok ? "Finished" : "Error";
+  const args = escapeHtml(JSON.stringify(action.arguments ?? {}, null, 2));
+  return `<article class="change is-${tone}">
+      <div class="meta">
+        <span class="badge badge-${tone}">${escapeHtml(toneLabel(action))}</span>
+        <span class="tag">Reported by proxy</span>
+        <span class="tag">${escapeHtml(status)}</span>
+      </div>
+      <h3>${escapeHtml(action.summary)}</h3>
+      <details class="more">
+        <summary>Details</summary>
+        <p class="why">${when} · ${escapeHtml(action.tool)} · ${action.durationMs} ms</p>
+        ${action.error ? `<p class="warn">${escapeHtml(action.error)}</p>` : ""}
+        ${action.resultSummary ? `<p>${escapeHtml(action.resultSummary)}</p>` : ""}
+        <pre class="args">${args}</pre>
+      </details>
+    </article>`;
+}
+
+function toneClass(tone: ActionTone): string {
+  switch (tone) {
+    case "added":
+      return "added";
+    case "changed":
+      return "modified";
+    case "removed":
+      return "removed";
+    case "read":
+      return "read";
+    case "unknown":
+      return "unknown";
+    default:
+      return assertNever(tone, "action tone");
+  }
+}
+
+function toneLabel(action: ReceiptAction): string {
+  switch (action.tone) {
+    case "added":
+      return "Created";
+    case "changed":
+      return "Changed";
+    case "removed":
+      return action.tool.toLowerCase().includes("send") ? "Sent" : "Deleted";
+    case "read":
+      return "Read";
+    case "unknown":
+      return "Unknown";
+    default:
+      return assertNever(action.tone, "action tone");
+  }
+}
+
 function renderChange(change: Change): string {
   const actor = change.actor?.login ? `<span class="tag">${escapeHtml(change.actor.login)}</span>` : "";
   const app = change.viaApp?.name || change.viaApp?.slug;
@@ -168,6 +271,7 @@ function renderChange(change: Change): string {
   return `<article class="change is-${change.kind}">
       <div class="meta">
         <span class="badge badge-${change.kind}">${iconFor(change.kind)}${escapeHtml(kindLabel(change.kind))}</span>
+        <span class="tag">Verified from service history</span>
         <span class="tag">${escapeHtml(confidenceLabel(change.confidence))}</span>
         ${claim}${actor}${via}
       </div>

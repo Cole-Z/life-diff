@@ -44,7 +44,7 @@ function resourceServer(env: Env): OAuthResourceServer<Env, AuthProps> {
         if (!SCOPES.every((scope) => ctx.auth.scope.includes(scope))) {
           return insufficientScope(ctx.auth, [...SCOPES]);
         }
-        const mcp = createMcpHandler(() => createLifeDiffServer(bound), {
+        const mcp = createMcpHandler(async () => createLifeDiffServer(bound), {
           route: "/mcp",
           authContext: {
             props: {

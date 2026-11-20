@@ -12,7 +12,7 @@ export interface Classification {
 const CREATED = new Set(["create", "add", "insert"]);
 const CHANGED = new Set(["update", "move", "write", "post", "edit", "patch", "set"]);
 const REMOVED = new Set(["delete", "remove", "send"]);
-const READ = new Set(["get", "list", "search", "read", "fetch", "query"]);
+const READ = new Set(["get", "list", "search", "read", "fetch", "query", "ask", "describe", "lookup", "check"]);
 
 /** A write verb wins over a read verb. delete, remove, and send win over other writes. */
 export function classifyToolName(name: string): Classification {
@@ -34,8 +34,9 @@ export function serviceLabel(name: string): string {
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
-export function plainAction(service: string, classification: Classification, subject: string | undefined, ok: boolean): string {
+export function plainAction(service: string, classification: Classification, subject: string | undefined, ok: boolean, tool?: string): string {
   const label = serviceLabel(service);
+  const name = tool?.trim() || "";
   if (!ok) {
     return subject ? `Tried to use ${label} for “${subject}”, and it failed.` : `Tried to use ${label}, and it failed.`;
   }
@@ -50,9 +51,15 @@ export function plainAction(service: string, classification: Classification, sub
       }
       return subject ? `Deleted “${subject}” in ${label}.` : `Deleted something in ${label}.`;
     case "read":
+      if (classification.verb === "ask") {
+        return subject ? `Asked ${label}: “${subject}”.` : `Asked ${label}.`;
+      }
+      if (name) return subject ? `Read ${name} from ${label}: “${subject}”.` : `Read ${name} from ${label}.`;
       return subject ? `Looked up “${subject}” in ${label}.` : `Looked something up in ${label}.`;
     case "unknown":
-      return subject ? `Used ${label} with “${subject}”.` : `Used ${label}.`;
+      if (name && subject) return `Called ${name} on ${label}: “${subject}”.`;
+      if (name) return `Called ${name} on ${label}.`;
+      return subject ? `Called a tool on ${label}: “${subject}”.` : `Called a tool on ${label}.`;
     default:
       return assertNever(classification.tone, "action tone");
   }

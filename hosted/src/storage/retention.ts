@@ -1,3 +1,5 @@
+import { receiptCardKey } from "../receipt/card";
+import { roundupJsonKey } from "../receipt/roundup";
 import type { AbandonedSession, MetadataStore, ObjectStore } from "./types";
 
 export interface SessionSweeper {
@@ -19,7 +21,7 @@ export async function runRetention(input: {
   limit: number;
 }): Promise<RetentionReport> {
   const receipts = await input.meta.expiredReceipts(input.nowIso, input.limit);
-  await input.objects.delete(receipts.flatMap((row) => [row.jsonKey, row.htmlKey]));
+  await input.objects.delete(receipts.flatMap((row) => [row.jsonKey, row.htmlKey, receiptCardKey(row.jsonKey)]));
   await input.meta.deleteReceipts(receipts.map((row) => row.id));
 
   const snapshots = await input.meta.expiredSnapshots(input.nowIso, input.limit);
@@ -41,7 +43,18 @@ export async function deleteUserData(input: {
   sessions: SessionSweeper;
   userId: string;
 }): Promise<{ objects: number }> {
-  const keys = await input.meta.userObjectKeys(input.userId);
+  const roundupKey = roundupJsonKey(input.userId);
+  const roundupRaw = await input.objects.get(roundupKey);
+  const extra = [roundupKey];
+  if (roundupRaw) {
+    try {
+      const cardKey = (JSON.parse(roundupRaw) as { cardKey?: string }).cardKey;
+      if (cardKey?.startsWith("roundups/") && cardKey.endsWith(".png")) extra.push(cardKey);
+    } catch {
+      // The roundup file is removed either way.
+    }
+  }
+  const keys = [...await input.meta.userObjectKeys(input.userId), ...extra];
   await input.objects.delete(keys);
   await input.sessions.wipe(input.userId);
   await input.meta.deleteUserRows(input.userId);

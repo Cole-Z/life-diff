@@ -145,3 +145,22 @@ func child() {
 		}
 	}
 }
+
+func TestClassifyReadsAndSummaries(t *testing.T) {
+	ask := classifyTool("ask_wiki_question")
+	if ask.effect != "read" || ask.verb != "ask" {
+		t.Fatalf("ask %#v", ask)
+	}
+	if got := plainAction("deepwiki", ask, "How does React work?", true, "ask_wiki_question"); got != "Asked Deepwiki: “How does React work?”." {
+		t.Fatalf("ask summary %q", got)
+	}
+	read := classifyTool("read_wiki_structure")
+	if got := plainAction("deepwiki", read, "facebook/react", true, "read_wiki_structure"); got != "Read read_wiki_structure from Deepwiki: “facebook/react”." {
+		t.Fatalf("read summary %q", got)
+	}
+	for _, name := range []string{"get_page", "describe_repo", "lookup_user", "check_status"} {
+		if classifyTool(name).effect != "read" {
+			t.Fatalf("%s", name)
+		}
+	}
+}

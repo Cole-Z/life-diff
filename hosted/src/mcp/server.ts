@@ -10,6 +10,7 @@ import { D1MetadataStore } from "../storage/d1";
 import type { ClaimInput } from "../receipt/types";
 import type { GitHubApi } from "../github/types";
 import { getMcpAuthContext } from "agents/mcp/server";
+import { buildRoundup, pngContent, receiptPresentation } from "../receipt/roundup";
 
 const claimSchema = z.object({
   id: z.string().optional(),
@@ -25,7 +26,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "start_session",
     {
-      description: "Snapshot GitHub repos the Life Diff app can read and open a session. Call this before the agent changes anything. Read-only.",
+      description: "Snapshot GitHub and open a session. A session from the last 30 minutes is returned as-is. An older open session is closed into a receipt first. Read-only.",
       inputSchema: z.object({
         repos: z.array(z.string()).max(25).optional(),
         timeZone: z.string().optional(),
@@ -59,7 +60,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "end_session",
     {
-      description: "Close the session and write a receipt. Proxied tool calls are on the receipt. If this session snapshotted GitHub, the receipt also includes that verified diff.",
+      description: "Close the session and write a receipt. Show the returned markdown to the user verbatim after finishing a task. Do not paraphrase it. Proxied calls are reported by the proxy. A GitHub snapshot is verified from service history.",
       inputSchema: z.object({
         sessionId: z.string().optional(),
         timeZone: z.string().optional(),
@@ -78,35 +79,70 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
         ...(input.timeZone ? { timeZone: input.timeZone } : {}),
         ...(input.claims ? { claims: input.claims as ClaimInput[] } : {}),
       });
+      const link = receiptUrl(env, result.receipt.id);
+      const shown = await receiptPresentation(core, result.receipt, link);
       const payload = {
         summary: result.summary,
         receipt: result.receipt,
-        url: receiptUrl(env, result.receipt.id),
-        htmlUrl: receiptUrl(env, result.receipt.id),
+        markdown: shown.markdown,
+        url: link,
+        htmlUrl: link,
+        ...(shown.imageUrl ? { imageUrl: shown.imageUrl } : {}),
         ...(input.includeHtml ? { html: result.html } : {}),
       };
-      return text(`${result.summary}\n\n${receiptUrl(env, result.receipt.id)}`, payload);
+      return shownContent(shown.markdown, shown.png, payload);
     }),
   );
   server.registerTool(
     "get_receipt",
     {
-      description: "Read a Life Diff receipt that end_session already saved.",
+      description: "Read a Life Diff receipt that end_session already saved. Show the returned markdown to the user verbatim.",
       inputSchema: z.object({
         receiptId: z.string(),
         includeHtml: z.boolean().optional(),
       }),
     },
     async (input) => run(async () => {
-      const result = await getReceipt(coreDeps(env, user()), input.receiptId);
+      const who = user();
+      const deps = coreDeps(env, who);
+      const result = await getReceipt(deps, input.receiptId);
+      const link = receiptUrl(env, result.receipt.id);
+      const shown = await receiptPresentation(deps, result.receipt, link);
       const payload = {
         summary: result.receipt.counts,
         receipt: result.receipt,
-        url: receiptUrl(env, result.receipt.id),
-        htmlUrl: receiptUrl(env, result.receipt.id),
+        markdown: shown.markdown,
+        url: link,
+        htmlUrl: link,
+        ...(shown.imageUrl ? { imageUrl: shown.imageUrl } : {}),
         ...(input.includeHtml ? { html: result.html } : {}),
       };
-      return text(`Receipt ${result.receipt.id}\n${receiptUrl(env, result.receipt.id)}`, payload);
+      return shownContent(shown.markdown, shown.png, payload);
+    }),
+  );
+  server.registerTool(
+    "get_roundup",
+    {
+      description: "Merge recent sessions into one receipt, with the same markdown and image as end_session. Show that markdown to the user verbatim when they ask for a roundup, at the end of a long work session, or when you are close to your usage or context limits. Do not post a roundup after every single change. Life Diff does not run undos. The Undo lines are instructions you can follow with the original tool if the user asks.",
+      inputSchema: z.object({ since: z.string().optional() }),
+    },
+    async (input) => run(async () => {
+      const who = user();
+      const roundup = await buildRoundup(
+        { ...coreDeps(env, who), issuer: env.ISSUER },
+        { save: true, ...(input.since ? { since: input.since } : {}) },
+      );
+      return shownContent(roundup.markdown, roundup.png, {
+        since: roundup.since,
+        url: `${env.ISSUER.replace(/\/$/, "")}/roundup`,
+        ...(roundup.imageUrl ? { imageUrl: roundup.imageUrl } : {}),
+        lines: roundup.lines.map((line) => ({
+          service: line.service,
+          summary: line.summary,
+          ...(line.id ? { id: line.id } : {}),
+          ...(line.undo ? { undoHint: line.undo } : {}),
+        })),
+      });
     }),
   );
   server.registerTool(
@@ -205,13 +241,28 @@ function user(): { userId: string; login: string } {
   return { userId, login };
 }
 
-async function run(work: () => Promise<{ content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown> }>) {
+type ToolContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: "image/png" };
+
+async function run(work: () => Promise<{ content: ToolContent[]; structuredContent: Record<string, unknown> }>) {
   try {
     return await work();
   } catch (error) {
     const message = error instanceof AppError || error instanceof Error ? error.message : "Life Diff failed";
     return { content: [{ type: "text" as const, text: message }], isError: true };
   }
+}
+
+function shownContent(markdown: string, png: Uint8Array, structured: unknown) {
+  const image = pngContent(png);
+  return {
+    content: [
+      { type: "text" as const, text: markdown },
+      ...(image ? [image] : []),
+    ],
+    structuredContent: structured as Record<string, unknown>,
+  };
 }
 
 function text(message: string, structured: unknown) {

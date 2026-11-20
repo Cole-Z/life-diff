@@ -32,7 +32,7 @@ A recorded call stores:
 
 Redaction replaces values whose keys contain `token`, `secret`, `password`, `authorization`, `key`, or `cookie` with `[redacted]`. The forwarded call still receives the original arguments. The receipt does not.
 
-Classification looks at words in the tool name. `delete`, `remove`, and `send` are red writes. `create`, `add`, and `insert` are green. `update`, `move`, `write`, `post`, `edit`, `patch`, and `set` are amber. `get`, `list`, `search`, `read`, `fetch`, and `query` are gray reads. A write word wins over a read word. Anything else is unknown.
+Classification looks at words in the tool name. `delete`, `remove`, and `send` are red writes. `create`, `add`, and `insert` are green. `update`, `move`, `write`, `post`, `edit`, `patch`, and `set` are amber. `ask`, `read`, `get`, `describe`, `lookup`, `check`, `list`, `search`, `fetch`, and `query` are gray reads. A write word wins over a read word. Anything else is unknown. A read is summarized as “Asked Deepwiki: …” or “Read read_wiki_structure from Deepwiki.” A closed GitHub issue or pull request is a change, not a removal. A removal is reported only when both lists are complete. `get_roundup` merges recent receipts. Each write line has a short id and an Undo hint. Life Diff does not run the undo.
 
 An upstream failure is returned to the agent as an MCP tool error and is still recorded.
 

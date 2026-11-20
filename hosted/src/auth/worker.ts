@@ -16,6 +16,7 @@ import { D1MetadataStore, R2ObjectStore } from "../storage/d1";
 import { deleteUserData } from "../storage/retention";
 import { revokeAllGrants } from "./grants";
 import { renderAccount, renderConsentPage, renderDeleted, renderHome, renderPrivacy, renderSignedOut } from "../http/pages";
+import { handleRoundup } from "../http/roundup";
 import { handleSettings } from "../http/settings";
 import { sessionSweeper } from "../app/runtime";
 
@@ -49,6 +50,7 @@ export async function handleApp(request: Request, env: Env, ctx: ExecutionContex
     if (url.pathname === "/account") return await account(request, env);
     if (url.pathname === "/account/delete") return await deleteAccount(request, env);
     if (url.pathname === "/settings" || url.pathname === "/settings/remove") return await handleSettings(request, env);
+    if (url.pathname === "/roundup" || url.pathname === "/roundup/card.png") return await handleRoundup(request, env);
     if (url.pathname === "/privacy") return html(renderPrivacy());
     if (url.pathname === "/health") return Response.json({ ok: true });
     if (url.pathname === "/") return html(renderHome());

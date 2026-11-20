@@ -122,4 +122,6 @@ export interface Receipt {
   warnings?: string[];
   /** Tool calls recorded by the proxy. Readers of schema 1.0.0 ignore unknown fields. */
   actions?: RecordedAction[];
+  /** Unguessable token for the public receipt card image. */
+  cardToken?: string;
 }

@@ -7,7 +7,7 @@ description: Verify what an agent changed in the user's accounts by snapshotting
 
 Life Diff writes one receipt of the tool calls it forwarded, and, where a service exposes history, a check against that history. An agent's message that the work is done is a claim, not proof.
 
-The hosted server is `https://lifediff.dev/mcp`. Register other MCP servers with `add_upstream` (name, https URL, optional token) or at `https://lifediff.dev/settings`. Their tools appear as `<name>__<tool>`. Reconnect after adding one if the tool list is stale. Call `end_session`, then `get_receipt`, and open the link. Lines from forwarded tools say reported by proxy. GitHub lines say verified from service history. Call `start_session` before the work when that GitHub check should be in the same receipt.
+The hosted server is `https://lifediff.dev/mcp`. Register other MCP servers with `add_upstream` (name, https URL, optional token) or at `https://lifediff.dev/settings`. Their tools appear as `<name>__<tool>`. Reconnect after adding one if the tool list is stale. Call `end_session` or `get_receipt` and show the returned markdown to the user verbatim. Call `get_roundup` when the user asks, at the end of a long session, or when you are close to a usage or context limit. Do not post a roundup after every change. Life Diff does not run the Undo lines. Lines from forwarded tools say reported by proxy. GitHub lines say verified from service history. Call `start_session` before the work when that GitHub check should be in the same receipt.
 
 The self-run command still reads the user's Google accounts itself and compares them with a snapshot. That path is below.
 

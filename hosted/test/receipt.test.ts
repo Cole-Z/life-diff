@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { diffGitHub } from "../src/github/diff";
-import type { AfterRead, GitHubSnapshot } from "../src/github/types";
+import { readAfter } from "../src/github/snapshot";
+import type { AfterRead, GitHubApi, GitHubSnapshot } from "../src/github/types";
 import { buildReceipt } from "../src/receipt/build";
 import { applyClaims } from "../src/receipt/claims";
 import { confidenceAt } from "../src/receipt/confidence";
@@ -134,6 +135,7 @@ describe("GitHub diff", () => {
     expect(types).toContain("modified:branch:main");
     expect(types).toContain("modified:pull_request:Fix login flow");
     expect(types).toContain("modified:issue:Bug");
+    expect(diff.changes.find((change) => change.resourceName === "Bug")?.summary).toContain("Closed");
     expect(types).toContain("added:issue:Docs");
     expect(types).toContain("added:comment:Looks good");
     expect(types).toContain("modified:file:src/login.ts");
@@ -153,6 +155,68 @@ describe("GitHub diff", () => {
     const file = diff.changes.find((change) => change.resourceType === "file");
     expect(JSON.stringify(file)).not.toContain("function");
     expect(file?.fields.find((field) => field.field === "content")?.after).toBe("+10 −2");
+  });
+
+  it("shows a closed pull request as changed", () => {
+    const before = snapshot();
+    const read = after();
+    const pull = read.snapshot.repos[0]!.pulls[0]!;
+    pull.state = "closed";
+    const closed = diffGitHub(before, read, checked).changes.find((change) => change.resourceType === "pull_request");
+    expect(closed?.kind).toBe("modified");
+    expect(closed?.summary).toContain("Closed");
+  });
+
+  it("does not infer removals from a truncated or partial list", () => {
+    const before = snapshot();
+    const read = after();
+    read.snapshot.repos[0]!.issues = [];
+    read.snapshot.repos[0]!.issuesPartial = true;
+    read.snapshot.repos[0]!.branches = [{ name: "main", sha: "ccc3333" }];
+    read.snapshot.repos[0]!.branchesTruncated = true;
+    const changes = diffGitHub(before, read, checked).changes;
+    expect(changes.some((change) => change.kind === "removed" && change.resourceType === "issue")).toBe(false);
+    expect(changes.some((change) => change.kind === "removed" && change.resourceType === "branch")).toBe(false);
+  });
+
+  it("reports a removal only when both lists are complete", () => {
+    const before = snapshot();
+    const read = after();
+    read.snapshot.repos[0]!.issues = [];
+    const removed = diffGitHub(before, read, checked).changes.find((change) => change.resourceType === "issue" && change.kind === "removed");
+    expect(removed?.resourceName).toBe("Bug");
+  });
+
+  it("keeps a just-closed issue and does not remove issues outside the since window", async () => {
+    const before = snapshot();
+    before.repos[0]!.issues.push({
+      number: 9,
+      title: "Old",
+      state: "open",
+      labels: [],
+      updatedAt: "2026-03-01T00:00:00.000Z",
+    });
+    const api: GitHubApi = {
+      async listInstallations() { return []; },
+      async listInstallationRepos() { return { truncated: false, repos: [] }; },
+      async listBranches() { return { truncated: false, branches: before.repos[0]!.branches }; },
+      async listPulls() { return { truncated: false, pulls: before.repos[0]!.pulls }; },
+      async listIssues() {
+        return {
+          truncated: false,
+          issues: [{ ...before.repos[0]!.issues[0]!, state: "closed", updatedAt: "2026-04-02T15:25:00.000Z" }],
+        };
+      },
+      async listCommits() { return { truncated: false, commits: [] }; },
+      async compare() { return { truncated: false, files: [] }; },
+      async listIssueComments() { return { truncated: false, comments: [] }; },
+      async listReviewComments() { return { truncated: false, comments: [] }; },
+    };
+    const read = await readAfter(api, before, checked);
+    const changes = diffGitHub(before, read, checked).changes.filter((change) => change.resourceType === "issue");
+    expect(changes.map((change) => change.summary).join("\n")).toContain("Closed");
+    expect(changes.some((change) => change.kind === "removed")).toBe(false);
+    expect(changes.some((change) => change.resourceName === "Old")).toBe(false);
   });
 });
 

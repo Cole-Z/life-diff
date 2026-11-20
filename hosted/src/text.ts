@@ -2,6 +2,11 @@ export function assertNever(value: never, label: string): never {
   throw new Error(`Unhandled ${label}: ${JSON.stringify(value)}`);
 }
 
+export function randomToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export function newId(prefix: string, now: Date): string {
   const bytes = crypto.getRandomValues(new Uint8Array(4));
   const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");

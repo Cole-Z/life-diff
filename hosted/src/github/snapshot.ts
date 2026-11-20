@@ -31,7 +31,7 @@ export async function takeSnapshot(api: GitHubApi, input: {
   }
   const repos: RepoSnap[] = [];
   for (const ref of selected) {
-    repos.push((await readRepo(api, ref, warnings)).snap);
+    repos.push(await readRepo(api, ref, warnings));
   }
   return {
     schemaVersion: "1.0.0",
@@ -55,30 +55,15 @@ export async function readAfter(api: GitHubApi, before: GitHubSnapshot, checkedA
     try {
       const ref = { fullName: prior.fullName, installationId: prior.installationId ?? 0, defaultBranch: prior.defaultBranch };
       const current = await readRepo(api, ref, warnings, before.takenAt);
-      if (current.branchesTruncated) {
-        for (const branch of prior.branches) {
-          if (!current.snap.branches.some((item) => item.name === branch.name)) current.snap.branches.push(branch);
-        }
-      }
-      if (current.pullsTruncated) {
-        for (const pull of prior.pulls) {
-          if (!current.snap.pulls.some((item) => item.number === pull.number)) current.snap.pulls.push(pull);
-        }
-      }
-      if (current.issuesTruncated) {
-        for (const issue of prior.issues) {
-          if (!current.snap.issues.some((item) => item.number === issue.number)) current.snap.issues.push(issue);
-        }
-      }
-      repos.push(current.snap);
-      const commitPage = await api.listCommits(prior.fullName, before.takenAt, current.snap.defaultBranch);
+      repos.push(current);
+      const commitPage = await api.listCommits(prior.fullName, before.takenAt, current.defaultBranch);
       commits.push(...commitPage.commits);
       if (commitPage.truncated) truncatedChanges = true;
       const issueComments = await api.listIssueComments(prior.fullName, before.takenAt);
       const reviewComments = await api.listReviewComments(prior.fullName, before.takenAt);
       comments.push(...issueComments.comments, ...reviewComments.comments);
       if (issueComments.truncated || reviewComments.truncated) truncatedChanges = true;
-      const compared = await api.compare(prior.fullName, prior.defaultSha, current.snap.defaultSha);
+      const compared = await api.compare(prior.fullName, prior.defaultSha, current.defaultSha);
       const newest = commitPage.commits.find((commit) => commit.committedAt)?.committedAt;
       const actor = commitPage.commits[0]?.author;
       files.push(...compared.files.map((file) => ({
@@ -109,12 +94,7 @@ export async function readAfter(api: GitHubApi, before: GitHubSnapshot, checkedA
   };
 }
 
-async function readRepo(api: GitHubApi, ref: { fullName: string; installationId?: number; defaultBranch: string }, warnings: string[], since?: string): Promise<{
-  snap: RepoSnap;
-  branchesTruncated: boolean;
-  pullsTruncated: boolean;
-  issuesTruncated: boolean;
-}> {
+async function readRepo(api: GitHubApi, ref: { fullName: string; installationId?: number; defaultBranch: string }, warnings: string[], since?: string): Promise<RepoSnap> {
   const branches = await api.listBranches(ref.fullName);
   if (branches.truncated) warnings.push(`Branch list truncated for ${ref.fullName}.`);
   const defaultBranch = branches.branches.find((branch) => branch.name === ref.defaultBranch) ?? branches.branches[0];
@@ -125,17 +105,16 @@ async function readRepo(api: GitHubApi, ref: { fullName: string; installationId?
   const relevantPulls = since ? pulls.pulls.filter((pull) => !pull.updatedAt || pull.updatedAt >= since || pull.state === "open") : pulls.pulls.filter((pull) => pull.state === "open");
   const relevantIssues = since ? issues.issues.filter((issue) => !issue.updatedAt || issue.updatedAt >= since || issue.state === "open") : issues.issues.filter((issue) => issue.state === "open");
   return {
-    branchesTruncated: branches.truncated,
-    pullsTruncated: pulls.truncated,
-    issuesTruncated: issues.truncated,
-    snap: {
-      fullName: ref.fullName,
-      ...(ref.installationId ? { installationId: ref.installationId } : {}),
-      defaultBranch: defaultBranch?.name ?? ref.defaultBranch,
-      defaultSha: defaultBranch?.sha ?? "",
-      branches: branches.branches,
-      pulls: relevantPulls,
-      issues: relevantIssues,
-    },
+    fullName: ref.fullName,
+    ...(ref.installationId ? { installationId: ref.installationId } : {}),
+    defaultBranch: defaultBranch?.name ?? ref.defaultBranch,
+    defaultSha: defaultBranch?.sha ?? "",
+    branches: branches.branches,
+    pulls: relevantPulls,
+    issues: relevantIssues,
+    ...(branches.truncated ? { branchesTruncated: true } : {}),
+    ...(pulls.truncated ? { pullsTruncated: true } : {}),
+    ...(issues.truncated ? { issuesTruncated: true } : {}),
+    ...(since ? { issuesPartial: true } : {}),
   };
 }

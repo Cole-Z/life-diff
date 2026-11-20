@@ -1,5 +1,7 @@
 import { actionsToClaims, validateAction, type ActionInput } from "../actions/log";
-import { newId, addDays, addHours, validTimeZone } from "../text";
+import { newId, addDays, addHours, randomToken, validTimeZone } from "../text";
+import { receiptCardKey, renderCardPng } from "../receipt/card";
+import { storyFromReceipt } from "../receipt/story";
 import { GitHubClient } from "../github/client";
 import { readAfter, takeSnapshot } from "../github/snapshot";
 import type { GitHubApi, GitHubSnapshot } from "../github/types";
@@ -63,9 +65,23 @@ export interface StartResult {
   warnings: string[];
 }
 
+const STALE_SESSION_MS = 30 * 60 * 1000;
+
 export async function startSession(deps: AppDeps, input: { repos?: string[]; timeZone?: string }): Promise<StartResult> {
   const open = await deps.sessions.getOpen();
-  if (open) throw new AppError("A session is already open. Call end_session before starting another.");
+  if (open) {
+    const age = deps.now.getTime() - Date.parse(open.startedAt);
+    if (Number.isFinite(age) && age < STALE_SESSION_MS) {
+      return {
+        sessionId: open.id,
+        snapshotId: open.snapshotId,
+        takenAt: open.startedAt,
+        repos: open.repos,
+        warnings: open.warnings,
+      };
+    }
+    await endSession(deps, { sessionId: open.id });
+  }
   const timeZone = input.timeZone?.trim() || deps.timeZone || "UTC";
   if (!validTimeZone(timeZone)) throw new AppError("timeZone must be an IANA name such as UTC or America/New_York.");
   const takenAt = deps.now.toISOString();
@@ -174,9 +190,16 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
       receipt.notes.push("Tool calls routed through Life Diff are marked reported by the proxy. They are not proof the service changed.");
     }
   }
-  const html = renderHtml(receipt);
   const jsonKey = `receipts/${deps.userId}/${receiptId}.json`;
   const htmlKey = `receipts/${deps.userId}/${receiptId}.html`;
+  try {
+    const png = await renderCardPng(storyFromReceipt(receipt), "Life Diff");
+    receipt.cardToken = randomToken();
+    await deps.objects.putBytes(receiptCardKey(jsonKey), png, "image/png");
+  } catch {
+    delete receipt.cardToken;
+  }
+  const html = renderHtml(receipt);
   await deps.objects.put(jsonKey, JSON.stringify(receipt), "application/json");
   await deps.objects.put(htmlKey, html, "text/html; charset=utf-8");
   await deps.meta.insertReceipt({

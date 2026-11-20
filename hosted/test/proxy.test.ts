@@ -27,10 +27,18 @@ describe("classification and names", () => {
     expect(classifyToolName("list_pages")).toMatchObject({ effect: "read", tone: "read" });
     expect(classifyToolName("search_docs")).toMatchObject({ effect: "read" });
     expect(classifyToolName("read_wiki_structure")).toMatchObject({ effect: "read", verb: "read" });
+    expect(classifyToolName("ask_wiki_question")).toMatchObject({ effect: "read", tone: "read", verb: "ask" });
+    expect(classifyToolName("describe_repo")).toMatchObject({ effect: "read", verb: "describe" });
+    expect(classifyToolName("lookup_user")).toMatchObject({ effect: "read", verb: "lookup" });
+    expect(classifyToolName("check_status")).toMatchObject({ effect: "read", verb: "check" });
+    expect(classifyToolName("get_receipt")).toMatchObject({ effect: "read", verb: "get" });
+    expect(classifyToolName("check_and_delete")).toMatchObject({ effect: "write", tone: "removed" });
     expect(classifyToolName("fetch_user")).toMatchObject({ effect: "read" });
     expect(classifyToolName("query_rows")).toMatchObject({ effect: "read" });
     expect(classifyToolName("ping")).toMatchObject({ effect: "unknown", tone: "unknown" });
-    expect(plainAction("deepwiki", classifyToolName("read_wiki_structure"), "facebook/react", true)).toBe("Looked up “facebook/react” in Deepwiki.");
+    expect(plainAction("deepwiki", classifyToolName("read_wiki_structure"), "facebook/react", true, "read_wiki_structure")).toBe("Read read_wiki_structure from Deepwiki: “facebook/react”.");
+    expect(plainAction("deepwiki", classifyToolName("ask_wiki_question"), "How does React work?", true, "ask_wiki_question")).toBe("Asked Deepwiki: “How does React work?”.");
+    expect(plainAction("deepwiki", classifyToolName("ping"), "pong", true, "ping")).toBe("Called ping on Deepwiki: “pong”.");
     expect(plainAction("slack", classifyToolName("send_message"), "hello", true)).toBe("Sent “hello” from Slack.");
   });
 

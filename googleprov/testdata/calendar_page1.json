@@ -1,0 +1,17 @@
+{
+  "items": [
+    {
+      "id": "evt_dentist",
+      "status": "confirmed",
+      "summary": "Dentist",
+      "location": "Office",
+      "description": "Cleaning",
+      "updated": "2026-04-01T15:00:00Z",
+      "htmlLink": "https://www.google.com/calendar/event?eid=dentist",
+      "start": {"dateTime": "2026-04-07T15:00:00-04:00", "timeZone": "America/New_York"},
+      "end": {"dateTime": "2026-04-07T16:00:00-04:00", "timeZone": "America/New_York"},
+      "attendees": [{"email": "sam@example.com", "responseStatus": "accepted"}]
+    }
+  ],
+  "nextPageToken": "page-2"
+}

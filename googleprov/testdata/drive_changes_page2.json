@@ -1,0 +1,10 @@
+{
+  "changes": [
+    {
+      "fileId": "file_old",
+      "removed": true,
+      "time": "2026-04-02T15:30:00Z"
+    }
+  ],
+  "newStartPageToken": "tok-2"
+}

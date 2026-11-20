@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "id": "evt_trip",
+      "status": "confirmed",
+      "summary": "Trip",
+      "updated": "2026-04-01T12:00:00Z",
+      "start": {"date": "2026-04-13"},
+      "end": {"date": "2026-04-14"}
+    }
+  ]
+}

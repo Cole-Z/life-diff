@@ -1,0 +1,21 @@
+# Google OAuth client files and saved sign-in. Never commit these.
+# The exception is the obvious fake client used by unit tests.
+credentials.json
+!auth/testdata/credentials.json
+client_secret*.json
+token.json
+**/token.json
+
+# Local snapshots and receipts.
+.lifediff/
+
+# Build output.
+/bin/
+*.exe
+*.test
+coverage.out
+
+# Editor and OS files.
+.DS_Store
+.idea/
+.vscode/

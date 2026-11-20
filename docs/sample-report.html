@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Life Diff receipt rcpt_sample</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --paper: #f3efe6;
+    --ink: #1c1915;
+    --muted: #5c564c;
+    --card: #fffdf8;
+    --line: #e4dccd;
+    --mast: #1e3a32;
+    --mast-ink: #f6f1e7;
+    --added: #0f5c32;
+    --added-bg: #e7f6ec;
+    --removed: #8d1c1c;
+    --removed-bg: #fdeeee;
+    --modified: #6b4300;
+    --modified-bg: #fff6e4;
+    --neutral: #3f3a33;
+    --neutral-bg: #efeae1;
+    --focus: #1e3a32;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #161310;
+      --ink: #f4efe6;
+      --muted: #c2b8a8;
+      --card: #221e1a;
+      --line: #3a332c;
+      --mast: #10241e;
+      --mast-ink: #f6f1e7;
+      --added: #9ddec0;
+      --added-bg: #143226;
+      --removed: #f3b4ae;
+      --removed-bg: #3a1717;
+      --modified: #f0cb86;
+      --modified-bg: #3a2c14;
+      --neutral: #f4efe6;
+      --neutral-bg: #2a251f;
+      --focus: #f0cb86;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 16px/1.5 "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 0 20px 64px; }
+  header.mast {
+    background: var(--mast);
+    color: var(--mast-ink);
+    padding: 28px 20px 22px;
+  }
+  header.mast .wrap { max-width: 880px; margin: 0 auto; }
+  .word { font-family: Georgia, "Iowan Old Style", Palatino, serif; font-size: 34px; margin: 0; letter-spacing: -0.03em; }
+  .lede { margin: 6px 0 0; color: #d9e6df; }
+  .session { margin: 14px 0 0; font-size: 14px; }
+  .headline { margin: 18px 0 0; font-size: 18px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .badge, .tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    border-radius: 999px; padding: 3px 10px; font-size: 13px; font-weight: 650;
+    border: 1px solid transparent;
+  }
+  .badge svg, .tag svg { width: 14px; height: 14px; display: block; }
+  .badge-added { background: var(--added-bg); color: var(--added); }
+  .badge-removed { background: var(--removed-bg); color: var(--removed); }
+  .badge-modified { background: var(--modified-bg); color: var(--modified); }
+  .tag { background: var(--neutral-bg); color: var(--neutral); font-weight: 600; }
+  section { margin-top: 28px; }
+  h2 { font-family: Georgia, Palatino, serif; font-size: 26px; margin: 0 0 4px; }
+  .intro { margin: 0 0 12px; color: var(--muted); }
+  article.change {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-left-width: 8px;
+    border-radius: 12px;
+    padding: 14px 16px 12px;
+    margin: 12px 0;
+  }
+  article.is-added { border-left-color: var(--added); }
+  article.is-removed { border-left-color: var(--removed); }
+  article.is-modified { border-left-color: var(--modified); }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  h3 { font-family: Georgia, Palatino, serif; font-size: 20px; line-height: 1.35; font-weight: 600; margin: 0 0 10px; }
+  .fields { display: grid; gap: 8px; margin: 0 0 8px; }
+  .field { display: grid; grid-template-columns: 7.5rem 1fr; gap: 8px; align-items: baseline; }
+  .field .label { color: var(--muted); font-size: 13px; }
+  .compare { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+  .before, .after, .value {
+    background: var(--neutral-bg);
+    border-radius: 8px;
+    padding: 4px 8px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .arrow { color: var(--muted); }
+  .why, .empty, .note, .warn { color: var(--muted); margin: 4px 0; }
+  .warn { color: var(--modified); }
+  a { color: var(--focus); }
+  footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
+  .claims article { border-left-color: var(--neutral); }
+  .claims article.is-verified { border-left-color: var(--added); }
+  .claims article.is-missing { border-left-color: var(--modified); }
+  @media (max-width: 640px) {
+    .field { grid-template-columns: 1fr; gap: 2px; }
+  }
+</style>
+</head>
+<body>
+<header class="mast">
+  <div class="wrap">
+    <p class="word">Life Diff</p>
+    <p class="lede">A read-only receipt of what changed in your Google accounts.</p>
+    <p class="session">Snapshot Thu, Apr 2, 11:00 AM · checked Thu, Apr 2, 11:40 AM</p>
+    <p class="headline">1 added, 1 removed, 3 modified</p>
+    <div class="legend" aria-label="Legend">
+      <span class="badge badge-added"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7 1h2v14H7zM1 7h14v2H1z"/></svg> Added</span>
+      <span class="badge badge-removed"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 7h14v2H1z"/></svg> Removed</span>
+      <span class="badge badge-modified"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M12.1 1.4l2.5 2.5-8.2 8.2H3.9V9.6l8.2-8.2zM2 14h12v1.5H2z"/></svg> Modified</span>
+    </div>
+  </div>
+</header>
+<main>
+  
+  <section>
+    <h2>Calendar</h2>
+    <p class="intro">Events from Thu, Apr 2, 12:00 AM to Wed, Jul 1, 12:00 AM.</p>
+    
+    
+    <article class="change is-added">
+      <div class="meta">
+        <span class="badge badge-added">
+  <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7 1h2v14H7zM1 7h14v2H1z"/></svg>
+Added</span>
+        <span class="tag">High confidence</span>
+        <span class="tag">The agent did not claim this.</span>
+      </div>
+      <h3>Added &#34;School pickup&#34; on Fri, Apr 10, 2:30 PM–3:00 PM.</h3>
+      
+      <div class="fields">
+        
+        <div class="field">
+          <div class="label">Title</div>
+          <div>
+            
+              <span class="value">School pickup</span>
+            
+          </div>
+        </div>
+        
+        <div class="field">
+          <div class="label">Starts</div>
+          <div>
+            
+              <span class="value">Fri, Apr 10, 2:30 PM</span>
+            
+          </div>
+        </div>
+        
+        <div class="field">
+          <div class="label">Ends</div>
+          <div>
+            
+              <span class="value">Fri, Apr 10, 3:00 PM</span>
+            
+          </div>
+        </div>
+        
+        <div class="field">
+          <div class="label">Location</div>
+          <div>
+            
+              <span class="value">Lincoln Elementary</span>
+            
+          </div>
+        </div>
+        
+      </div>
+      
+      <p class="why">Google saved this during the session, between the snapshot and this check.</p>
+      <p><a href="https://www.google.com/calendar/event?eid=pickup">Open in Google</a></p>
+    </article>
+    
+    <article class="change is-modified">
+      <div class="meta">
+        <span class="badge badge-modified">
+  <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M12.1 1.4l2.5 2.5-8.2 8.2H3.9V9.6l8.2-8.2zM2 14h12v1.5H2z"/></svg>
+Modified</span>
+        <span class="tag">High confidence</span>
+        <span class="tag">The agent claimed this.</span>
+      </div>
+      <h3>Moved &#34;Dentist&#34; from Tue, Apr 7, 3:00 PM to Wed, Apr 8, 10:00 AM. Changed the location of &#34;Dentist&#34; from &#34;Office&#34; to &#34;Clinic&#34;.</h3>
+      
+      <div class="fields">
+        
+        <div class="field">
+          <div class="label">Starts</div>
+          <div>
+            
+              <div class="compare">
+                <span class="before">Tue, Apr 7, 3:00 PM</span>
+                <span class="arrow" aria-hidden="true">→</span>
+                <span class="after">Wed, Apr 8, 10:00 AM</span>
+              </div>
+            
+          </div>
+        </div>
+        
+        <div class="field">
+          <div class="label">Ends</div>
+          <div>
+            
+              <div class="compare">
+                <span class="before">Tue, Apr 7, 4:00 PM</span>
+                <span class="arrow" aria-hidden="true">→</span>
+                <span class="after">Wed, Apr 8, 11:00 AM</span>
+              </div>
+            
+          </div>
+        </div>
+        
+        <div class="field">
+          <div class="label">Location</div>
+          <div>
+            
+              <div class="compare">
+                <span class="before">Office</span>
+                <span class="arrow" aria-hidden="true">→</span>
+                <span class="after">Clinic</span>
+              </div>
+            
+          </div>
+        </div>
+        
+      </div>
+      
+      <p class="why">Google saved this during the session, between the snapshot and this check.</p>
+      <p><a href="https://www.google.com/calendar/event?eid=dentist">Open in Google</a></p>
+    </article>
+    
+    <article class="change is-modified">
+      <div class="meta">
+        <span class="badge badge-modified">
+  <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M12.1 1.4l2.5 2.5-8.2 8.2H3.9V9.6l8.2-8.2zM2 14h12v1.5H2z"/></svg>
+Modified</span>
+        <span class="tag">Low confidence</span>
+        <span class="tag">The agent did not claim this.</span>
+      </div>
+      <h3>Renamed &#34;Gym&#34; to &#34;Morning gym&#34;.</h3>
+      
+      <div class="fields">
+        
+        <div class="field">
+          <div class="label">Title</div>
+          <div>
+            
+              <div class="compare">
+                <span class="before">Gym</span>
+                <span class="arrow" aria-hidden="true">→</span>
+                <span class="after">Morning gym</span>
+              </div>
+            
+          </div>
+        </div>
+        
+      </div>
+      
+      <p class="why">Google dates this before the snapshot, so it may not have been done in this session.</p>
+      
+    </article>
+    
+  </section>
+  
+  <section>
+    <h2>Drive</h2>
+    <p class="intro">File details compared with Drive&#39;s change history since the snapshot.</p>
+    
+    
+    <article class="change is-modified">
+      <div class="meta">
+        <span class="badge badge-modified">
+  <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M12.1 1.4l2.5 2.5-8.2 8.2H3.9V9.6l8.2-8.2zM2 14h12v1.5H2z"/></svg>
+Modified</span>
+        <span class="tag">High confidence</span>
+        <span class="tag">The agent did not claim this.</span>
+      </div>
+      <h3>Renamed &#34;Vacation ideas&#34; to &#34;Vacation ideas (final)&#34;. Updated the contents of &#34;Vacation ideas (final)&#34;.</h3>
+      
+      <div class="fields">
+        
+        <div class="field">
+          <div class="label">Name</div>
+          <div>
+            
+              <div class="compare">
+                <span class="before">Vacation ideas</span>
+                <span class="arrow" aria-hidden="true">→</span>
+                <span class="after">Vacation ideas (final)</span>
+              </div>
+            
+          </div>
+        </div>
+        
+        <div class="field">
+          <div class="label">Contents</div>
+          <div>
+            
+              <div class="compare">
+                <span class="before">version 3, saved Wed, Apr 1, 8:00 AM</span>
+                <span class="arrow" aria-hidden="true">→</span>
+                <span class="after">version 4, saved Thu, Apr 2, 11:25 AM</span>
+              </div>
+            
+          </div>
+        </div>
+        
+      </div>
+      
+      <p class="why">Google saved this during the session, between the snapshot and this check.</p>
+      <p><a href="https://docs.google.com/document/d/file_vac">Open in Google</a></p>
+    </article>
+    
+    <article class="change is-removed">
+      <div class="meta">
+        <span class="badge badge-removed">
+  <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 7h14v2H1z"/></svg>
+Removed</span>
+        <span class="tag">High confidence</span>
+        <span class="tag">The agent did not claim this.</span>
+      </div>
+      <h3>Removed &#34;Old draft.docx&#34; from Drive.</h3>
+      
+      <p class="why">Google saved this during the session, between the snapshot and this check.</p>
+      
+    </article>
+    
+  </section>
+  
+
+  
+  <section class="claims">
+    <h2>What the agent said</h2>
+    <p class="intro">Each claim is marked verified when Google shows a matching change, or missing when it does not.</p>
+    
+    
+    <article class="change is-verified">
+      <div class="meta">
+        <span class="badge badge-added">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8.2l3.2 3.2 7.3-7.4" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          Verified
+        </span>
+      </div>
+      <h3>Verified &#34;Dentist&#34; in Calendar (modified)</h3>
+      <p>Moved to Wednesday at 10:00 AM</p>
+      <p class="why">This matches a Calendar change to &#34;Dentist&#34;.</p>
+    </article>
+    
+    <article class="change is-missing">
+      <div class="meta">
+        <span class="badge badge-modified">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10.2 10.2L13.5 13.5" stroke="currentColor" stroke-width="1.8"/></svg>
+          Missing
+        </span>
+      </div>
+      <h3>Missing &#34;Q2 goals&#34; in Drive (added)</h3>
+      <p>Created a doc named Q2 goals</p>
+      <p class="why">No matching change showed up in Drive.</p>
+    </article>
+    
+  </section>
+  
+
+  
+
+  <section>
+    <h2>How to read this</h2>
+    <p class="note">This receipt is from Google&#39;s records, not from what the agent said.</p><p class="note">Life Diff only read data. It did not change Calendar or Drive.</p><p class="note">Drive file contents are not downloaded. A content update means Drive saved a new version; the old and new text are not shown.</p><p class="note">Times are shown in America/New_York.</p>
+  </section>
+  <footer>Receipt rcpt_sample · schema 1.0.0 · Life Diff did not change any Google data.</footer>
+</main>
+</body>
+</html>
+
+
+
+
+
+
+

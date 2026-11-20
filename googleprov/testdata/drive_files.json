@@ -1,0 +1,24 @@
+{
+  "files": [
+    {
+      "id": "file_notes",
+      "name": "Notes",
+      "mimeType": "application/vnd.google-apps.document",
+      "modifiedTime": "2026-04-01T12:00:00Z",
+      "createdTime": "2026-01-02T12:00:00Z",
+      "trashed": false,
+      "parents": ["folder_root"],
+      "version": "12",
+      "webViewLink": "https://docs.google.com/document/d/file_notes"
+    },
+    {
+      "id": "file_sheet",
+      "name": "Budget",
+      "mimeType": "application/vnd.google-apps.spreadsheet",
+      "modifiedTime": "2026-03-01T12:00:00Z",
+      "size": "2048",
+      "md5Checksum": "abc123def456",
+      "version": 4
+    }
+  ]
+}

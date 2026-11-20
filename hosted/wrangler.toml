@@ -11,20 +11,16 @@ main = "src/index.ts"
 compatibility_date = "2026-11-20"
 compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 
-# Leave the workers.dev hostname on until the custom domain route below is
-# uncommented and deployed. Then set workers_dev = false so tokens are only
-# issued for https://lifediff.dev.
-workers_dev = true
+# workers.dev is off. Tokens are issued only for https://lifediff.dev.
+workers_dev = false
 
-# Production route. Uncomment when the lifediff.dev zone is on this account
-# and you are ready to attach the Worker. Do not enable this from CI.
-#
-# [[routes]]
-# pattern = "lifediff.dev"
-# custom_domain = true
-#
-# Path layout once that route is live (handled inside the Worker, not as
-# separate route patterns):
+# Production route for the lifediff.dev zone on this account. It is active.
+# Do not change it from CI.
+[[routes]]
+pattern = "lifediff.dev"
+custom_domain = true
+
+# Path layout (handled inside the Worker, not as separate route patterns):
 #   https://lifediff.dev/            account, privacy, and the authorization server
 #   https://lifediff.dev/callback    GitHub App user-to-server callback
 #   https://lifediff.dev/mcp         remote MCP endpoint
@@ -35,23 +31,23 @@ workers_dev = true
 ENVIRONMENT = "production"
 ISSUER = "https://lifediff.dev"
 MCP_SERVER_URL = "https://lifediff.dev/mcp"
-GITHUB_APP_CLIENT_ID = "replace-with-github-app-client-id"
-GITHUB_APP_SLUG = "replace-with-github-app-slug"
+GITHUB_APP_CLIENT_ID = "Iv23liCCBcNdwnWlUjz6"
+GITHUB_APP_SLUG = "life-diff"
 RECEIPT_RETENTION_DAYS = "90"
 SNAPSHOT_RETENTION_HOURS = "24"
 ABANDONED_SESSION_DAYS = "7"
 MAX_REPOS = "25"
 
-# Placeholder ids. Create the real resources with wrangler and replace these
-# before deploy. They are not live credentials.
+# Production resource ids. These identify the KV namespace and D1 database.
+# They are not secrets.
 [[kv_namespaces]]
 binding = "OAUTH_KV"
-id = "00000000-0000-0000-0000-000000000000"
+id = "f578a2d2a3664581979744fb7a1fe81f"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "life-diff"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "0215e660-136e-40e8-839f-867d8bbbabc8"
 migrations_dir = "migrations"
 
 [[r2_buckets]]

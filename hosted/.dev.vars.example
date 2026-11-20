@@ -1,0 +1,10 @@
+# Copy to .dev.vars for `wrangler dev`. Never commit .dev.vars.
+# Local URLs must stay on loopback. The production values live in wrangler.toml.
+
+ISSUER=http://localhost:8787
+MCP_SERVER_URL=http://localhost:8787/mcp
+GITHUB_APP_CLIENT_ID=replace-with-github-app-client-id
+GITHUB_APP_CLIENT_SECRET=replace-with-github-app-client-secret
+GITHUB_APP_SLUG=replace-with-github-app-slug
+TOKEN_ENCRYPTION_KEY=replace-with-base64-32-byte-key
+COOKIE_SIGNING_KEY=replace-with-a-long-random-string

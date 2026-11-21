@@ -25,6 +25,6 @@ export function recordedFrom(action: LoggedAction): RecordedAction | null {
     ...(typeof action.durationMs === "number" ? { durationMs: action.durationMs } : {}),
     ...(action.arguments !== undefined ? { arguments: action.arguments } : {}),
     ...(action.client ? { client: action.client } : {}),
-    source: "proxy",
+    source: action.source === "claim" ? "claim" : "proxy",
   };
 }

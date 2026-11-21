@@ -53,6 +53,7 @@ export async function registerUpstreamTools(server: McpServer, env: Env, user: {
           content: reply.content,
           ...(reply.isError ? { isError: true } : {}),
           ...(reply.structuredContent ? { structuredContent: reply.structuredContent } : {}),
+          ...(reply._meta ? { _meta: reply._meta } : {}),
         };
       });
     }

@@ -98,7 +98,7 @@ describe("inline receipt", () => {
     expect(markdown).toContain("⚪");
     expect(markdown).toContain("**DeepWiki**");
     expect(markdown).toContain("1 lookup");
-    expect(markdown).toContain("Reported by the agent");
+    expect(markdown).toContain("Seen by Life Diff");
     expect(markdown).toContain("Confirmed by GitHub");
     expect(markdown).toContain("Reopen");
     expect(markdown).not.toContain("```diff");

@@ -12,7 +12,7 @@ import type { ClaimInput, ClaimResult, Receipt, RecordedAction } from "../receip
 import { SessionBook, type LoggedAction, type NewAction, type OpenSession } from "../session/book";
 import type { Classification } from "../proxy/classify";
 import { boundJson } from "../proxy/redact";
-import { recordedFrom } from "../receipt/actions";
+import { attachReadClaims, corroborateActions } from "../receipt/corroborate";
 import { phraseAction } from "../receipt/phrase";
 import type { MetadataStore, ObjectStore, ReceiptMeta } from "../storage/types";
 
@@ -148,10 +148,11 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
   if (!open || (input.sessionId && input.sessionId !== open.id)) throw new AppError("There is no open session to end.");
   const checkedAt = deps.now.toISOString();
   const logged = await deps.sessions.list(open.id);
+  const folded = corroborateActions(logged);
   const claims = combineClaims(logged, input.claims);
   const timeZone = input.timeZone && validTimeZone(input.timeZone) ? input.timeZone : open.timeZone;
   const receiptId = newId("rcpt", deps.now);
-  const actions = recordedActions(logged);
+  const actions = folded.recorded;
   let receipt: Receipt;
   if (!open.snapshotKey) {
     receipt = buildActionReceipt({
@@ -180,6 +181,7 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
     const github = await readGitHubReceipt(deps, open, { receiptId, checkedAt, timeZone, claims, actions, allowFailure: input.allowGitHubFailure === true });
     receipt = github;
   }
+  attachReadClaims(receipt, folded.readClaims);
   const jsonKey = `receipts/${deps.userId}/${receiptId}.json`;
   const htmlKey = `receipts/${deps.userId}/${receiptId}.html`;
   try {
@@ -347,7 +349,7 @@ async function readGitHubReceipt(deps: AppDeps, open: OpenSession, input: {
     });
     if (input.actions.length > 0) {
       receipt.actions = input.actions;
-      receipt.notes.push("Tool calls routed through Life Diff are marked reported by the proxy. They are not proof the service changed.");
+      receipt.notes.push("Tool calls Life Diff forwarded are marked Seen by Life Diff. They are not proof the service changed.");
     }
     return receipt;
   } catch (error) {
@@ -436,13 +438,6 @@ export async function recordProxyCall(deps: CoreDeps, input: {
   });
 }
 
-function recordedActions(actions: LoggedAction[]): RecordedAction[] {
-  return actions.flatMap((action) => {
-    const recorded = recordedFrom(action);
-    return recorded ? [recorded] : [];
-  });
-}
-
 export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId?: string; client?: string }): Promise<LoggedAction> {
   const open = await deps.sessions.getOpen();
   if (!open || (input.sessionId && input.sessionId !== open.id)) throw new AppError("There is no open session to log against. Call start_session first.");
@@ -460,11 +455,11 @@ export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId
     loggedAt: deps.now.toISOString(),
     tool,
     target,
+    source: "claim",
     ...normalized,
     ...(input.detail?.trim() ? { detail: input.detail.trim() } : {}),
     ...(input.client?.trim() ? { client: input.client.trim().slice(0, 80) } : {}),
     ...(read ? {
-      source: "claim" as const,
       upstream: tool,
       effect: "read" as const,
       tone: "read" as const,

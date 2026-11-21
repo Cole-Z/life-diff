@@ -1,5 +1,5 @@
 import type { CoreDeps } from "../app/service";
-import { recordedFrom } from "./actions";
+import { corroborateActions } from "./corroborate";
 import { bytesToBase64, renderCardPng } from "./card";
 import { renderDiffPage } from "./page";
 import { condenseLines, headlineFor, renderStory, storyFromActions, storyFromChanges, storyFromReceipt, type StoryLine } from "./story";
@@ -199,12 +199,12 @@ async function collectLines(deps: CoreDeps, settings: UserSettings, window: { st
   const open = await deps.sessions.getOpen();
   if (open) {
     const logged = await deps.sessions.list(open.id);
-    for (const action of logged) {
-      if (action.loggedAt < window.start || action.loggedAt >= window.end) continue;
-      if (after && action.loggedAt < after) continue;
-      const recorded = recordedFrom(action);
-      if (recorded) raw.push(...storyFromActions([recorded]));
-    }
+    const recorded = corroborateActions(logged).recorded.filter((action) => {
+      if (action.time < window.start || action.time >= window.end) return false;
+      if (after && action.time < after) return false;
+      return true;
+    });
+    raw.push(...storyFromActions(recorded));
   }
   return condenseLines(raw, { detail });
 }

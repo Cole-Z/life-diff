@@ -63,6 +63,10 @@ export interface ClaimResult {
   reason: string;
   resource?: string;
   repo?: string;
+  /** True when this claim matches a call Life Diff forwarded in the same session. */
+  corroborated?: boolean;
+  /** Id of the proxied action this claim was folded into. */
+  matchedActionId?: string;
 }
 
 export interface ReceiptGitHub {
@@ -102,7 +106,9 @@ export interface RecordedAction {
   error?: string;
   durationMs?: number;
   arguments?: unknown;
-  source: "proxy";
+  source: "proxy" | "claim";
+  /** A log_action claim in this session described the same call. */
+  corroborated?: boolean;
   /** MCP client that reported the call, when more than one agent is in view. */
   client?: string;
 }

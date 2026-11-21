@@ -6,7 +6,7 @@ Life Diff is what all your AI agents changed across your tools today. GitHub is 
 
 ## What you get
 
-The first line says whether to care. Writes come first, in plain words, with a link when one is known. Lookups collapse to one quiet line. A failure is red and says why. A line GitHub confirmed says so. Everything else says the agent reported it.
+The first line says whether to care. Writes come first, in plain words, with a link when one is known. Lookups collapse to one quiet line per service. A failure is red and says why. A line GitHub confirmed says **Confirmed by GitHub**. A call Life Diff forwarded says **Seen by Life Diff**. A lookup only the agent reported says **Reported by the agent**.
 
 ![The same receipt in dark mode](docs/images/receipt-dark.webp)
 
@@ -78,27 +78,27 @@ cole-z/cardpost
 🟢 Opened pull request "Fix login" (#12) on cole-z/cardpost. · [Open](https://github.com/cole-z/cardpost/pull/12) · Confirmed by GitHub
 
 **Gmail**
-🔴 Sent 'Notes for Friday' from Gmail. · [Open](https://mail.google.com/mail/u/0/#drafts/demo) · Reported by the agent · Grok Bot
+🔴 Sent 'Notes for Friday' from Gmail. · [Open](https://mail.google.com/mail/u/0/#drafts/demo) · Seen by Life Diff · Grok Bot
 
 **Google Calendar**
-🟢 Created event 'Team standup' in Google Calendar. · [Open](https://calendar.google.com/calendar/r/eventedit/demo) · Reported by the agent · Delete this event · Grok Bot
+🟢 Created event 'Team standup' in Google Calendar. · [Open](https://calendar.google.com/calendar/r/eventedit/demo) · Seen by Life Diff · Delete this event · Grok Bot
 
 **Google Drive**
-🟡 Renamed 'Q2 goals' to 'Q2 plan' in Google Drive. · [Open](https://drive.google.com/file/d/demo/view) · Reported by the agent · Cursor
+🟡 Renamed 'Q2 goals' to 'Q2 plan' in Google Drive. · [Open](https://drive.google.com/file/d/demo/view) · Seen by Life Diff · Cursor
 
 **Notion**
-⚠️ Could not create page 'Launch checklist' in Notion. The page was not saved. · Reported by the agent · Cursor
+⚠️ Could not create page 'Launch checklist' in Notion. The page was not saved. · Seen by Life Diff · Cursor
 
 **DeepWiki**
-⚪ 2 lookups · Reported by the agent · Grok Bot
+⚪ 2 lookups · Seen by Life Diff · Grok Bot
 
 **Slack**
-⚪ 1 lookup · Reported by the agent · Cursor
+⚪ 1 lookup · Seen by Life Diff · Cursor
 
 Full receipt: https://lifediff.dev/receipts/rcpt_demo
 ```
 
-A day with only lookups starts `Nothing changed · 2 lookups`. A session that only looked things up starts `Read-only session`.
+A day or a session with only lookups starts `Nothing changed · 2 lookups`. With nothing at all, both say `Nothing changed`. A read the agent logs on top of a call Life Diff already forwarded is counted once.
 
 Life Diff only sees calls routed through it. It does not block, rewrite, or retry a call. A missing list item is not a deletion. Tokens are encrypted and are never returned or written to a log.
 

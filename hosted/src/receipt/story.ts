@@ -5,6 +5,7 @@ import { isGitHubClaimService, serviceForClaim } from "./claims";
 import { displayName, shortService } from "./names";
 import { lineRepo } from "./phrase";
 import { claimSentence, presentAction } from "./present";
+import { coveredClaimIds, undoDedupeKey } from "./merge";
 import { planFromAction, undoForChange, undoLabel, type UndoPlan } from "./undo";
 import type { Change, ClaimResult, Receipt, RecordedAction } from "./types";
 
@@ -31,6 +32,12 @@ export function trustLabel(source: LineSource, _service: string): string {
       return never;
     }
   }
+}
+
+/** Lookups Life Diff forwarded name the service. A lookup only the agent reported stays Agent said. */
+export function lookupTrust(source: LineSource, service: string): string {
+  if (source === "proxy") return `Sent to ${displayName(service)}`;
+  return trustLabel(source, service);
 }
 
 export interface StoryLine {
@@ -62,6 +69,8 @@ export interface StoryLine {
   client?: string;
   trust?: string;
   hint?: string;
+  /** Set after undo_change or undo_session. The prompt stays, the row no longer offers a fresh Undo link. */
+  undoRequested?: boolean;
 }
 
 const MAX_CHAT_LINES = 10;
@@ -74,12 +83,18 @@ export function visibleActions(receipt: Pick<Receipt, "actions" | "claims">): Re
 
 export function storyFromReceipt(receipt: Receipt): StoryLine[] {
   const actions = visibleActions(receipt);
+  const covered = coveredClaimIds(actions, receipt.claims);
+  const requested = new Set(receipt.undoRequestedSeeds ?? []);
   const lines = [
     ...storyFromActions(actions),
     ...storyFromChanges(receipt.id, receipt.changes),
-    ...storyFromUnverifiedClaims(receipt.claims, new Set(actions.map((action) => action.id))),
+    ...storyFromUnverifiedClaims(receipt.claims, new Set([...actions.map((action) => action.id), ...covered])),
     ...mismatchLines(actions, receipt.changes),
-  ].map((line) => ({ ...line, receiptId: line.receiptId ?? receipt.id }));
+  ].map((line) => ({
+    ...line,
+    receiptId: line.receiptId ?? receipt.id,
+    ...(requested.has(line.seed) ? { undoRequested: true } : {}),
+  }));
   return markUnmatched(lines, receipt.claims);
 }
 
@@ -119,12 +134,12 @@ export function condenseLines(lines: StoryLine[], input: { detail: boolean }): S
       summary: `${items.length} ${noun}`,
       seed: `reads:${first.source}:${first.service}:${items.map((item) => item.seed).join(",")}`,
       readCount: items.length,
-      trust: trustLabel(first.source, first.service),
+      trust: lookupTrust(first.source, first.service),
       details: items.map((item) => ({ text: item.summary })),
       ...(clients.size === 1 ? { client: [...clients][0] } : {}),
     });
   }
-  return assignIds(orderLines(folded)).map(stampTrust);
+  return assignIds(dedupeUndo(orderLines(folded))).map(stampTrust);
 }
 
 export function renderStory(input: {
@@ -199,9 +214,10 @@ export function headlineFor(lines: StoryLine[], _label: string): string {
   return footer || "Nothing changed";
 }
 
-export function agentTitle(lines: StoryLine[], timeZone?: string, startedAt?: string, endedAt?: string): string {
+export function agentTitle(lines: StoryLine[], timeZone?: string, startedAt?: string, endedAt?: string, agentName?: string): string {
   const names = [...new Set(lines.map((line) => line.client).filter((client): client is string => Boolean(client)))];
-  const who = names.length === 0 ? "Agent" : names.join(", ");
+  const named = agentName?.trim();
+  const who = names.length === 0 ? (named || "Agent") : names.join(", ");
   const times = lines.map((line) => line.time).filter((time): time is string => Boolean(time)).sort();
   const start = startedAt || times[0];
   const end = endedAt || times[times.length - 1];
@@ -331,6 +347,65 @@ export function summaryText(lines: StoryLine[]): string {
   return summaryChips(lines).map((chip) => `${chip.symbol}${chip.count} ${chip.label}`).join("  ");
 }
 
+export interface StorySummary {
+  added: number;
+  changed: number;
+  removed: number;
+  moved: number;
+  shared: number;
+  verified: number;
+  agentSaid: number;
+  notFound: number;
+  notChecked: number;
+  failed: number;
+  /** Same chip line the markdown prints. Empty when every kind count is zero. */
+  text: string;
+}
+
+/** Counts the markdown is built from. Trust words match the row tags, never "missing". */
+export function storySummary(lines: StoryLine[]): StorySummary {
+  const counts: Record<ChipKind, number> = { added: 0, changed: 0, removed: 0, moved: 0, shared: 0 };
+  let verified = 0;
+  let agentSaid = 0;
+  let notFound = 0;
+  let notChecked = 0;
+  let failed = 0;
+  for (const line of lines) {
+    const tone = displayTone(line);
+    const kind = chipKind(line);
+    if (kind) counts[kind] += 1;
+    if (tone === "read" || tone === "note" || tone === "unknown") continue;
+    if (tone === "failed") {
+      failed += 1;
+      continue;
+    }
+    if (tone === "not_found") {
+      notFound += 1;
+      continue;
+    }
+    if (tone === "not_checked") {
+      notChecked += 1;
+      continue;
+    }
+    const trust = line.trust ?? trustLabel(line.source, line.service);
+    if (trust === "Verified" || line.source === "verified") verified += 1;
+    else agentSaid += 1;
+  }
+  return {
+    added: counts.added,
+    changed: counts.changed,
+    removed: counts.removed,
+    moved: counts.moved,
+    shared: counts.shared,
+    verified,
+    agentSaid,
+    notFound,
+    notChecked,
+    failed,
+    text: summaryText(lines),
+  };
+}
+
 export function footerFor(lines: StoryLine[]): string {
   let claimed = 0;
   let found = 0;
@@ -446,11 +521,15 @@ export function cardLineText(line: StoryLine, _showReadTrust = false): string {
   const label = kindName(kind);
   const service = shortService(line.service);
   if (kind === "failed") return redactText(`Failed · ${service} — ${summary}`);
-  if (kind === "not_found") return redactText(`? Not found · Agent said — ${summary}`);
-  if (kind === "not_checked") return redactText(`Not checked · Agent said — ${summary}`);
+  if (kind === "not_found") return redactText(`? Not found · Agent said — ${summary}${undoState(line)}`);
+  if (kind === "not_checked") return redactText(`Not checked · ${service} · Agent said — ${summary}${undoState(line)}`);
   const trust = line.trust ?? trustLabel(line.source, line.service);
   const mark = symbol ? `${symbol} ` : "";
-  return redactText(`${mark}${label} · ${service} · ${trust} — ${summary}`);
+  return redactText(`${mark}${label} · ${service} · ${trust} — ${summary}${undoState(line)}`);
+}
+
+function undoState(line: StoryLine): string {
+  return line.undoRequested ? " · Undo requested" : "";
 }
 
 export function lineColor(line: StoryLine): string {
@@ -472,8 +551,35 @@ export function lineMarker(line: StoryLine): string {
 export function assignIds(lines: StoryLine[]): StoryLine[] {
   const used = new Set<string>();
   return lines.map((line) => {
-    if (!line.undo) return { ...line, id: undefined };
+    if (!line.undo && !needsRowId(line)) return { ...line, id: undefined };
     return { ...line, id: shortId(line.seed, used) };
+  });
+}
+
+/** Not found, not checked, and failed rows can be named so undo_change can refuse them. */
+function needsRowId(line: StoryLine): boolean {
+  return line.tone === "not_found" || line.tone === "not_checked" || line.tone === "failed";
+}
+
+function dedupeUndo(lines: StoryLine[]): StoryLine[] {
+  const seen = new Set<string>();
+  return lines.map((line) => {
+    if (!line.undo || line.undoRequested) return line;
+    const key = undoDedupeKey(line);
+    if (seen.has(key)) {
+      return {
+        ...line,
+        undo: undefined,
+        undoTool: undefined,
+        undoArguments: undefined,
+        undoSuggestedTool: undefined,
+        undoSuggestedArguments: undefined,
+        undoDaysLeft: undefined,
+        hint: "Undo not available",
+      };
+    }
+    seen.add(key);
+    return line;
   });
 }
 
@@ -510,14 +616,14 @@ function actionLine(action: RecordedAction): StoryLine {
     time: action.time,
     callKey: `${action.upstream}\0${action.tool}\0${stable(action.arguments)}`,
     ok: action.ok,
-    trust: presented.tone === "failed" ? failedTrust(service) : trustLabel(source, service),
+    trust: presented.tone === "failed" ? failedTrust(service) : presented.tone === "read" ? lookupTrust(source, service) : trustLabel(source, service),
     ...(action.verb ? { verb: action.verb } : {}),
     ...(action.tool ? { tool: action.tool } : {}),
     ...(presented.repo ? { repo: presented.repo } : {}),
     ...(presented.link ? { link: presented.link } : {}),
     ...(details ? { details } : {}),
     ...(presented.client ? { client: presented.client } : {}),
-    ...undoFields(shaped),
+    ...(presented.write && (source === "proxy" || source === "claim") ? undoFields(shaped) : {}),
   };
 }
 
@@ -534,6 +640,7 @@ export function storyFromUnverifiedClaims(claims: ClaimResult[], shownIds: Set<s
         summary: `"${claim.target}": no matching change`,
         seed: claim.id,
         trust: "Agent said",
+        hint: "Undo not available",
         ...(claim.url?.startsWith("https://") ? { link: claim.url } : {}),
         ...(repo ? { repo } : {}),
       };
@@ -555,17 +662,9 @@ export function storyFromUnverifiedClaims(claims: ClaimResult[], shownIds: Set<s
       summary,
       seed: claim.id,
       trust: "Agent said",
+      hint: "Undo not available",
       ...(claim.url?.startsWith("https://") ? { link: claim.url } : {}),
       ...(repo ? { repo } : {}),
-      ...undoFields(planFromAction({
-        tool: toolOf(claim),
-        upstream: service,
-        tone,
-        effect: "write",
-        summary,
-        ok: true,
-        ...(claim.before || claim.after ? { arguments: { before: claim.before, after: claim.after, subject: claim.target } } : {}),
-      })),
     };
   });
 }
@@ -877,12 +976,18 @@ function formatChange(line: StoryLine, pageLink: string, showClient: boolean): s
   let head: string;
   if (kind === "failed") head = `Failed · ${service}`;
   else if (kind === "not_found") head = `? Not found · Agent said`;
-  else if (kind === "not_checked") head = `Not checked · Agent said`;
+  else if (kind === "not_checked") head = `Not checked · ${service} · Agent said`;
   else if (kind === "read") head = `${service}${who}`;
   else head = `${markerFor(kind)} ${kindName(kind)} · ${service}${trust ? ` · ${trust}` : ""}${who}`;
-  const href = undoHref(pageLink, line);
+  const href = line.undoRequested ? undefined : undoHref(pageLink, line);
   const link = line.link ? ` · [Open](${line.link})` : "";
-  const undo = href ? ` · [${undoLabel(line.undoDaysLeft)}](${href})` : "";
+  const undo = line.undoRequested
+    ? " · Undo requested"
+    : href
+      ? ` · [${undoLabel(line.undoDaysLeft)}](${href})`
+      : line.hint
+        ? ` · ${line.hint}`
+        : "";
   return [head, `${rowBody(line)}${link}${undo}`];
 }
 
@@ -951,12 +1056,13 @@ export function undoPlansFor(receipt: Receipt, origin: string): {
       ...(line.undoSuggestedTool ? { suggestedTool: line.undoSuggestedTool } : {}),
       ...(line.undoSuggestedArguments ? { suggestedArguments: line.undoSuggestedArguments } : {}),
       ...(line.undoDaysLeft ? { daysLeft: line.undoDaysLeft } : {}),
+      ...(line.undoRequested ? { requested: true as const } : {}),
     }];
   });
 }
 
 export function undoHref(pageLink: string, line: StoryLine): string | undefined {
-  if (!line.undo || !line.id) return undefined;
+  if (!line.undo || !line.id || line.undoRequested) return undefined;
   let origin = "";
   let path = "";
   try {

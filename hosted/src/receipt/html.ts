@@ -11,6 +11,7 @@ export function renderHtml(receipt: Receipt): string {
     timeZone: receipt.timeZone,
     startedAt: receipt.session.startedAt,
     endedAt: receipt.session.checkedAt,
+    ...(receipt.agentName ? { agentName: receipt.agentName } : {}),
     receiptId: receipt.id,
     notes: receipt.notes,
     footerNote: `Receipt ${receipt.id}`,

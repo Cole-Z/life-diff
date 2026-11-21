@@ -13,7 +13,8 @@ import type { ClaimInput } from "../receipt/types";
 import type { GitHubApi } from "../github/types";
 import { getMcpAuthContext } from "agents/mcp/server";
 import { redactText } from "../proxy/redact";
-import { buildRoundup, pngContent, receiptPresentation, sessionToolPayload, undoEntries } from "../receipt/roundup";
+import { signViewGrant, viewUrl } from "../crypto/view-token";
+import { buildRoundup, pngContent, receiptPresentation, sessionToolPayload, summaryFor, undoEntries } from "../receipt/roundup";
 
 const claimSchema = z.object({
   id: z.string().optional(),
@@ -50,12 +51,14 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
       inputSchema: z.object({
         repos: z.array(z.string()).max(25).optional(),
         timeZone: z.string().optional(),
+        agentName: z.string().optional(),
       }),
     },
-    async (input) => run(async () => {
+    async (input, ctx) => run(async () => {
       const who = user();
       const deps = input.repos && input.repos.length > 0 ? await appDeps(env, who) : { ...coreDeps(env, who), github: idleGithub() };
-      const result = await startSession(deps, input);
+      const agentName = input.agentName?.trim() || clientName(server, ctx);
+      const result = await startSession(deps, { ...input, ...(agentName ? { agentName } : {}) });
       const named = result.repos.length > 0 ? `GitHub: ${result.repos.join(", ")}.` : "GitHub history is off for this session.";
       return text(`Session ${result.sessionId}. ${named}`, result);
     }),
@@ -91,28 +94,33 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
         timeZone: z.string().optional(),
         claims: z.array(claimSchema).optional(),
         includeHtml: z.boolean().optional(),
+        agentName: z.string().optional(),
       }),
     },
-    async (input) => run(async () => {
+    async (input, ctx) => run(async () => {
       const who = user();
       const now = new Date();
       const core = coreDeps(env, who, now);
       const open = await core.sessions.getOpen();
       const deps = open?.snapshotKey ? await appDeps(env, who, now) : { ...core, github: idleGithub() };
+      const agentName = input.agentName?.trim() || clientName(server, ctx);
       const result = await endSession(deps, {
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         ...(input.timeZone ? { timeZone: input.timeZone } : {}),
         ...(input.claims ? { claims: input.claims as ClaimInput[] } : {}),
+        ...(agentName ? { agentName } : {}),
       });
       const link = receiptUrl(env, result.receipt.id);
       const shown = await receiptPresentation(core, result.receipt, link);
+      const signed = await signedView(env, "receipt", result.receipt.id, who.userId);
       const payload = sessionToolPayload({
-        summary: result.summary,
+        summary: summaryFor(result.receipt),
         receipt: result.receipt,
         markdown: shown.markdown,
         url: link,
         quiet: shown.quiet,
         ...(shown.imageUrl ? { imageUrl: shown.imageUrl } : {}),
+        ...(signed ? { viewUrl: signed } : {}),
         ...(input.includeHtml ? { html: result.html, includeHtml: true } : {}),
       });
       return shownContent(shown.markdown, shown.quiet ? new Uint8Array() : shown.png, payload);
@@ -160,12 +168,14 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
       const result = await getReceipt(deps, input.receiptId);
       const link = receiptUrl(env, result.receipt.id);
       const shown = await receiptPresentation(deps, result.receipt, link);
+      const signed = await signedView(env, "receipt", result.receipt.id, who.userId);
       const payload = {
-        summary: result.receipt.counts,
+        summary: summaryFor(result.receipt),
         receipt: result.receipt,
         markdown: shown.markdown,
         url: link,
-        htmlUrl: link,
+        htmlUrl: signed ?? link,
+        ...(signed ? { viewUrl: signed } : {}),
         ...(shown.imageUrl ? { imageUrl: shown.imageUrl } : {}),
         ...(input.includeHtml ? { html: result.html } : {}),
         undos: undoEntries(shown.lines, link),
@@ -282,10 +292,12 @@ function dailyHandler(env: Env) {
       },
     );
     const origin = env.ISSUER.replace(/\/$/, "");
+    const signed = await signedView(env, "day", roundup.day, who.userId);
     return shownContent(roundup.markdown, roundup.quiet ? new Uint8Array() : roundup.png, {
       day: roundup.day,
       since: roundup.since,
       url: `${origin}/roundup/${roundup.day}`,
+      ...(signed ? { viewUrl: signed } : {}),
       ...(roundup.imageUrl ? { imageUrl: roundup.imageUrl } : {}),
       lines: roundup.lines.map((line) => ({
         service: line.service,
@@ -325,6 +337,17 @@ function idleGithub(): GitHubApi {
     listIssueComments: fail,
     listReviewComments: fail,
   };
+}
+
+async function signedView(env: Env, kind: "receipt" | "day", id: string, userId: string): Promise<string | undefined> {
+  const key = env.COOKIE_SIGNING_KEY ?? "";
+  if (key.trim().length < 32) return undefined;
+  try {
+    const token = await signViewGrant(key, { kind, id, userId }, Math.floor(Date.now() / 1000));
+    return viewUrl(env.ISSUER, kind, id, token);
+  } catch {
+    return undefined;
+  }
 }
 
 function receiptUrl(env: Env, id: string): string {

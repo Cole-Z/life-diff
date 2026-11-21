@@ -32,6 +32,12 @@ export class UserSession extends DurableObject<Env> {
     await this.save(book);
   }
 
+  async setAgentName(sessionId: string, name: string): Promise<void> {
+    const book = await this.load();
+    book.setAgentName(sessionId, name);
+    await this.save(book);
+  }
+
   async close(sessionId: string): Promise<void> {
     const book = await this.load();
     book.close(sessionId);

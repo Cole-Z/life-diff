@@ -12,13 +12,14 @@ export function renderDiffPage(input: {
   timeZone?: string;
   startedAt?: string;
   endedAt?: string;
+  agentName?: string;
   receiptId?: string;
   notes?: string[];
   footerNote?: string;
 }): string {
   const rows = input.lines.filter((line) => line.tone !== "note" && line.tone !== "unknown" && !(line.tone === "read" && line.readCount));
   const clients = new Set(input.lines.map((line) => line.client).filter((client): client is string => Boolean(client)));
-  const heading = agentTitle(input.lines, input.timeZone, input.startedAt, input.endedAt);
+  const heading = agentTitle(input.lines, input.timeZone, input.startedAt, input.endedAt, input.agentName);
   const chips = summaryChips(input.lines);
   const footer = footerFor(input.lines);
   const undoable = rows.filter((line) => line.undo && line.id);
@@ -236,8 +237,14 @@ function renderRow(line: StoryLine, showClient: boolean, receiptId?: string): st
         : tone === "read"
           ? `Lookup`
           : `${symbol} ${label}`;
-  const serviceHtml = tone === "not_found" || tone === "not_checked" ? "" : `<span class="svc">${escapeHtml(service)}</span>`;
-  const undo = line.undo && line.id ? renderUndo(line, receiptId) : "";
+  const serviceHtml = tone === "not_found" ? "" : `<span class="svc">${escapeHtml(service)}</span>`;
+  const undo = line.undoRequested
+    ? `<span class="tag">Undo requested</span>`
+    : line.undo && line.id
+      ? renderUndo(line, receiptId)
+      : line.hint
+        ? `<span class="tag">${escapeHtml(line.hint)}</span>`
+        : "";
   const open = line.link?.startsWith("https://") ? ` <a href="${escapeHtml(line.link)}">Open</a>` : "";
   return `<article class="row kind-${kind}">
     <div class="head"><span class="kind">${escapeHtml(headLabel)}</span>${serviceHtml}${trustHtml}${who}${undo}</div>

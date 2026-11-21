@@ -6,7 +6,7 @@ import { redactSnippet } from "../src/proxy/redact";
 import { glyphRows, planCard, renderCardPng } from "../src/receipt/card";
 import { phraseAction } from "../src/receipt/phrase";
 import { claimSentence } from "../src/receipt/present";
-import { receiptPresentation, buildRoundup, sessionToolPayload } from "../src/receipt/roundup";
+import { receiptPresentation, buildRoundup, sessionToolPayload, summaryFor } from "../src/receipt/roundup";
 import { cardRows, chatText, condenseLines, headlineFor, isQuiet, renderStory, storyFromReceipt, trustLabel, type StoryLine } from "../src/receipt/story";
 import { SessionBook } from "../src/session/book";
 import { MemoryMetadataStore, MemoryObjectStore } from "../src/storage/memory";
@@ -157,7 +157,7 @@ describe("5. quiet when nothing changed", () => {
     expect(shown.markdown).not.toContain("GitHub not checked");
     expect(shown.imageUrl).toContain("/card.png?t=");
     const payload = sessionToolPayload({
-      summary: "quiet",
+      summary: summaryFor(ended.receipt),
       receipt: ended.receipt,
       markdown: shown.markdown,
       url: `https://lifediff.dev/receipts/${ended.receipt.id}`,

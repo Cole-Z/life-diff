@@ -1,8 +1,10 @@
 import { assertNever } from "../text";
+import { dedupeStoredReads } from "./corroborate";
+import { serviceForClaim } from "./claims";
 import { displayName } from "./names";
-import { presentAction } from "./present";
+import { claimSentence, presentAction } from "./present";
 import { reversalForChange } from "./undo";
-import type { Change, Receipt, RecordedAction } from "./types";
+import type { Change, ClaimResult, Receipt, RecordedAction } from "./types";
 
 export type StoryTone = "created" | "changed" | "removed" | "read" | "failed" | "unknown" | "note";
 
@@ -14,14 +16,15 @@ export interface StoryDetail {
 
 export type LineSource = "proxy" | "claim" | "verified";
 
-export function trustLabel(source: LineSource): string {
+export function trustLabel(source: LineSource, service: string): string {
+  const name = displayName(service);
   switch (source) {
     case "proxy":
-      return "Seen by Life Diff";
+      return `Sent to ${name}, not verified`;
     case "claim":
-      return "Reported by the agent";
+      return "Agent says it did this, not verified";
     case "verified":
-      return "Confirmed by GitHub";
+      return `Verified in ${name}`;
     default: {
       const never: never = source;
       return never;
@@ -43,6 +46,8 @@ export interface StoryLine {
   link?: string;
   callKey?: string;
   ok?: boolean;
+  verb?: string;
+  tool?: string;
   readCount?: number;
   repo?: string;
   client?: string;
@@ -52,11 +57,18 @@ export interface StoryLine {
 
 const MAX_CHAT_LINES = 10;
 
+export function visibleActions(receipt: Pick<Receipt, "actions" | "claims">): RecordedAction[] {
+  const actions = dedupeStoredReads(receipt.actions ?? []);
+  const verified = new Set(receipt.claims.filter((claim) => claim.status === "verified").map((claim) => claim.id));
+  return actions.filter((action) => !(action.source === "claim" && verified.has(action.id)));
+}
+
 export function storyFromReceipt(receipt: Receipt): StoryLine[] {
-  const actions = receipt.actions ?? [];
+  const actions = visibleActions(receipt);
   const lines = [
     ...storyFromActions(actions),
     ...storyFromChanges(receipt.id, receipt.changes),
+    ...storyFromUnverifiedClaims(receipt.claims, new Set(actions.map((action) => action.id))),
     ...mismatchLines(actions, receipt.changes),
   ];
   if (receipt.github.repos.length === 0 && receipt.github.optIn !== true) {
@@ -108,7 +120,7 @@ export function condenseLines(lines: StoryLine[], input: { detail: boolean }): S
       summary: `${items.length} ${noun}`,
       seed: `reads:${first.source}:${first.service}:${items.map((item) => item.seed).join(",")}`,
       readCount: items.length,
-      trust: trustLabel(first.source),
+      trust: trustLabel(first.source, first.service),
       details: items.map((item) => ({ text: item.summary })),
       ...(clients.size === 1 ? { client: [...clients][0] } : {}),
     });
@@ -158,18 +170,63 @@ export function renderStory(input: {
 
 /** Session receipts and the daily page use the same wording. `label` is the card caption, not this line. */
 export function headlineFor(lines: StoryLine[], _label: string): string {
-  const counts = countStory(lines);
-  const writes = counts.added + counts.modified + counts.removed;
-  if (writes === 0 && counts.failed === 0) {
-    if (counts.reads === 0) return "Nothing changed";
-    const noun = counts.reads === 1 ? "lookup" : "lookups";
-    return `Nothing changed · ${counts.reads} ${noun}`;
+  let changed = 0;
+  let reported = 0;
+  let failed = 0;
+  let reads = 0;
+  for (const line of lines) {
+    if (line.tone === "note" || line.tone === "unknown") continue;
+    if (line.tone === "read") {
+      reads += line.readCount ?? 1;
+      continue;
+    }
+    if (line.tone === "failed") {
+      failed += 1;
+      continue;
+    }
+    if (line.source === "claim") {
+      reported += 1;
+      continue;
+    }
+    if (line.tone === "created" || line.tone === "changed" || line.tone === "removed") changed += 1;
   }
-  if (writes === 0) return counts.failed === 1 ? "1 action failed" : `${counts.failed} actions failed`;
-  const things = writes === 1 ? "1 thing changed" : `${writes} things changed`;
-  if (counts.failed === 0) return things;
-  const look = counts.failed === 1 ? "1 needs a look" : `${counts.failed} need a look`;
+  if (changed === 0 && failed === 0 && reported === 0) {
+    if (reads === 0) return "Nothing changed";
+    const noun = reads === 1 ? "lookup" : "lookups";
+    return `Nothing changed · ${reads} ${noun}`;
+  }
+  if (changed === 0 && failed === 0) {
+    return reported === 1 ? "1 change reported, not verified" : `${reported} changes reported, not verified`;
+  }
+  if (changed === 0 && reported === 0) return failed === 1 ? "1 action failed" : `${failed} actions failed`;
+  if (changed === 0) {
+    const head = reported === 1 ? "1 change reported, not verified" : `${reported} changes reported, not verified`;
+    const look = failed === 1 ? "1 needs a look" : `${failed} need a look`;
+    return `${head}, ${look}`;
+  }
+  const things = changed === 1 ? "1 thing changed" : `${changed} things changed`;
+  const lookCount = failed + reported;
+  if (lookCount === 0) return things;
+  const look = lookCount === 1 ? "1 needs a look" : `${lookCount} need a look`;
   return `${things}, ${look}`;
+}
+
+/** Nothing was changed, claimed, or failed. The chat text is the headline alone. */
+export function isQuiet(lines: StoryLine[]): boolean {
+  return lines.every((line) => line.tone === "read" || line.tone === "note" || line.tone === "unknown");
+}
+
+export function chatText(input: {
+  headline: string;
+  lines: StoryLine[];
+  link: string;
+  linkLabel: string;
+}): { markdown: string; quiet: boolean } {
+  if (isQuiet(input.lines)) return { markdown: input.headline, quiet: true };
+  return {
+    markdown: renderStory(input),
+    quiet: false,
+  };
 }
 
 export function countStory(lines: StoryLine[]): { added: number; removed: number; modified: number; reads: number; failed: number } {
@@ -221,11 +278,36 @@ export function markerFor(tone: StoryTone): string {
   }
 }
 
-export function cardRows(lines: StoryLine[]): { color: string; text: string }[] {
+export function cardRows(lines: StoryLine[]): { color: string; text: string; source: LineSource }[] {
   return lines.filter((line) => line.tone !== "note").slice(0, 8).map((line) => ({
-    color: colorFor(line.tone),
-    text: line.summary,
+    color: lineColor(line),
+    text: cardLineText(line),
+    source: line.source,
   }));
+}
+
+export function cardLineText(line: StoryLine): string {
+  const service = serviceLabel(line.service);
+  const summary = line.summary.replace(/\.$/, "");
+  const named = summary.toLowerCase().includes(service.toLowerCase()) ? summary : `${service}: ${summary}`;
+  if (line.tone === "read") return named;
+  const trust = line.trust ?? trustLabel(line.source, line.service);
+  return `${named} · ${trust}`;
+}
+
+export function lineColor(line: StoryLine): string {
+  return colorFor(displayTone(line));
+}
+
+export function displayTone(line: StoryLine): StoryTone {
+  if (line.tone === "failed" || line.tone === "read" || line.tone === "note" || line.tone === "unknown") return line.tone;
+  if (isDestructiveLine(line)) return "removed";
+  if (line.source === "claim" && line.write) return "changed";
+  return line.tone;
+}
+
+export function lineMarker(line: StoryLine): string {
+  return markerFor(displayTone(line));
 }
 
 export function assignIds(lines: StoryLine[]): StoryLine[] {
@@ -239,8 +321,12 @@ export function assignIds(lines: StoryLine[]): StoryLine[] {
 function actionLine(action: RecordedAction): StoryLine {
   const presented = presentAction(action);
   const source = action.source === "claim" ? "claim" : "proxy";
+  const service = displayName(action.upstream || action.tool || "Service");
+  const details = presented.before || presented.after
+    ? [{ text: "When", ...(presented.before ? { before: presented.before } : {}), ...(presented.after ? { after: presented.after } : {}) }]
+    : undefined;
   return {
-    service: action.upstream || "unknown",
+    service,
     source,
     write: presented.write,
     tone: presented.tone,
@@ -249,12 +335,46 @@ function actionLine(action: RecordedAction): StoryLine {
     time: action.time,
     callKey: `${action.upstream}\0${action.tool}\0${stable(action.arguments)}`,
     ok: action.ok,
-    trust: trustLabel(source),
+    trust: trustLabel(source, service),
+    ...(action.verb ? { verb: action.verb } : {}),
+    ...(action.tool ? { tool: action.tool } : {}),
     ...(presented.repo ? { repo: presented.repo } : {}),
     ...(presented.link ? { link: presented.link } : {}),
-    ...(presented.hint ? { hint: presented.hint, undo: presented.hint } : {}),
+    ...(details ? { details } : {}),
+    ...(presented.hint ? { hint: presented.hint } : {}),
+    ...(presented.undoable ? { undo: "Undo available" } : {}),
     ...(presented.client ? { client: presented.client } : {}),
   };
+}
+
+export function storyFromUnverifiedClaims(claims: ClaimResult[], shownIds: Set<string>): StoryLine[] {
+  return claims.filter((claim) => claim.status === "missing" && claim.action !== "read" && !shownIds.has(claim.id)).map((claim) => {
+    const service = serviceForClaim(claim);
+    const tone = claim.action === "added" ? "created" : claim.action === "removed" ? "removed" : "changed";
+    return {
+      service,
+      source: "claim" as const,
+      write: true,
+      tone,
+      summary: claimSentence({
+        tool: toolOf(claim),
+        target: claim.target,
+        tone,
+        ...(claim.detail ? { detail: claim.detail } : {}),
+        ...(claim.before ? { before: claim.before } : {}),
+        ...(claim.after ? { after: claim.after } : {}),
+      }),
+      seed: claim.id,
+      trust: trustLabel("claim", service),
+      hint: "Undo not available yet",
+      ...(claim.url?.startsWith("https://") ? { link: claim.url } : {}),
+    };
+  });
+}
+
+function toolOf(claim: ClaimResult): string {
+  const match = /(?:^|\.\s*)Tool ([^.]+)/.exec(claim.detail ?? "");
+  return match?.[1]?.trim() || claim.service || "claim";
 }
 
 function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
@@ -294,9 +414,10 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
         summary: `Changed ${stat.count} files on ${repo} · ${statText(stat)}`,
         seed: `${receiptId}:files:${repo}`,
         repo,
-        trust: trustLabel("verified"),
+        trust: trustLabel("verified", "GitHub"),
         details: files.map(fileDetail),
         link: files.find((file) => file.link)?.link,
+        hint: "Undo not available yet",
       });
     }
     for (const pull of merged) {
@@ -316,9 +437,10 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
         summary: `${comments.length} comments on ${repo}`,
         seed: `${receiptId}:comments:${repo}`,
         repo,
-        trust: trustLabel("verified"),
+        trust: trustLabel("verified", "GitHub"),
         details: comments.map((comment) => ({ text: comment.summary })),
         link: comments.find((comment) => comment.link)?.link,
+        hint: "Undo not available yet",
       });
     }
   }
@@ -326,7 +448,7 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
 }
 
 function changeLine(receiptId: string, change: Change, summary: string, details: StoryDetail[]): StoryLine {
-  const hint = reversalForChange(change);
+  const undoable = Boolean(reversalForChange(change));
   return {
     service: "GitHub",
     source: "verified",
@@ -336,10 +458,11 @@ function changeLine(receiptId: string, change: Change, summary: string, details:
     seed: `${receiptId}:${change.id}`,
     time: change.occurredAt,
     repo: change.repo,
-    trust: trustLabel("verified"),
+    trust: trustLabel("verified", "GitHub"),
+    hint: undoable ? "Undo available" : "Undo not available yet",
     ...(details.length > 0 ? { details } : {}),
     ...(change.link ? { link: change.link } : {}),
-    ...(hint ? { hint, undo: hint } : {}),
+    ...(undoable ? { undo: "Undo available" } : {}),
   };
 }
 
@@ -454,44 +577,24 @@ function collapseRetries(lines: StoryLine[]): StoryLine[] {
 }
 
 function orderLines(lines: StoryLine[]): StoryLine[] {
-  const groups = new Map<string, StoryLine[]>();
-  for (const line of lines) {
-    const group = groups.get(line.service) ?? [];
-    group.push(line);
-    groups.set(line.service, group);
-  }
-  const ordered = [...groups.entries()].sort((a, b) => {
-    const aw = a[1].some((line) => line.tone !== "read") ? 0 : 1;
-    const bw = b[1].some((line) => line.tone !== "read") ? 0 : 1;
-    return aw - bw || a[0].localeCompare(b[0]);
-  });
-  const out: StoryLine[] = [];
-  for (const [, group] of ordered) {
-    group.sort((a, b) => toneRank(a.tone) - toneRank(b.tone) || (a.time ?? "").localeCompare(b.time ?? ""));
-    out.push(...group);
-  }
-  return out;
+  return [...lines].sort((a, b) => attentionRank(a) - attentionRank(b) || a.service.localeCompare(b.service) || (a.time ?? "").localeCompare(b.time ?? ""));
 }
 
-function toneRank(tone: StoryTone): number {
-  switch (tone) {
-    case "created":
-      return 0;
-    case "changed":
-      return 1;
-    case "removed":
-      return 2;
-    case "failed":
-      return 3;
-    case "unknown":
-      return 4;
-    case "read":
-      return 5;
-    case "note":
-      return 6;
-    default:
-      return assertNever(tone, "story tone");
-  }
+function attentionRank(line: StoryLine): number {
+  if (line.tone === "note") return 5;
+  if (line.tone === "read" || line.tone === "unknown") return 4;
+  if (line.source === "claim" && line.tone !== "failed") return 0;
+  if (line.tone === "failed") return 1;
+  if (isDestructiveLine(line)) return 2;
+  if (line.tone === "created" || line.tone === "changed" || line.tone === "removed") return 3;
+  return 4;
+}
+
+function isDestructiveLine(line: StoryLine): boolean {
+  if (line.tone === "failed" || line.tone === "read" || line.tone === "note" || line.tone === "unknown") return false;
+  if (line.tone === "removed") return true;
+  const blob = `${line.verb ?? ""} ${line.tool ?? ""} ${line.summary}`.toLowerCase().replace(/[_-]+/g, " ");
+  return /\b(deleted|delete|removed|remove|sent|send|shared|share|sharing|permissions|permission|unshared|unshare|revoked|revoke|trashed|trash)\b/.test(blob);
 }
 
 export function serviceLabel(name: string): string {
@@ -499,10 +602,10 @@ export function serviceLabel(name: string): string {
 }
 
 function formatLine(line: StoryLine, showClient: boolean): string {
-  const mark = markerFor(line.tone);
+  const mark = lineMarker(line);
   const prefix = mark ? `${mark} ` : "";
   const link = line.link ? ` · [Open](${line.link})` : "";
-  const trust = line.trust ? ` · ${line.trust}` : "";
+  const trust = line.tone === "read" ? "" : line.trust ? ` · ${line.trust}` : "";
   const hint = line.hint ? ` · ${line.hint}` : "";
   const by = showClient && line.client ? ` · ${line.client}` : "";
   return `${prefix}${line.summary}${link}${trust}${hint}${by}`;
@@ -544,7 +647,7 @@ function mismatchLines(actions: RecordedAction[], changes: Change[]): StoryLine[
       summary: `Agent said it closed #${number}, but GitHub shows it still open.`,
       seed: `mismatch:${action.id}`,
       time: action.time,
-      trust: trustLabel(source),
+      trust: trustLabel(source, "GitHub"),
       ...(repo ? { repo } : {}),
     });
   }

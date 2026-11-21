@@ -21,12 +21,16 @@ const claimSchema = z.object({
   target: z.string(),
   detail: z.string().optional(),
   repo: z.string().optional(),
+  before: z.string().optional(),
+  after: z.string().optional(),
+  url: z.string().optional(),
 });
 
 const INSTRUCTIONS = [
   "Life Diff is a daily diff of what your AI agents changed across the tools you use. It is not a GitHub diff. GitHub is only how the user signs in.",
-  "Route the user's other tool calls through this server. After an upstream is added, its tools are named <upstream>__<tool>. A session starts on the first call if none is open. The proxied result includes that session id. Call end_session before your final reply to the user so they get the receipt. Omit sessionId and end_session closes the open session. An idle session closes itself after the quiet period (20 minutes unless the user changed it).",
-  "Call get_daily_diff at the end of the day (get_roundup is the same tool) and show that markdown to the user. The day follows the user's time zone.",
+  "Route the user's other tool calls through this server. After an upstream is added, its tools are named <upstream>__<tool>. A session starts on the first call if none is open. The proxied result includes that session id. Call end_session before your final reply. Omit sessionId and end_session closes the open session. An idle session closes itself after the quiet period (20 minutes unless the user changed it).",
+  "Call log_action only for a change made outside Life Diff. Skip reads. Show the receipt only when something changed. When nothing changed, rely on get_daily_diff instead of pasting an empty receipt.",
+  "Call get_daily_diff at the end of the day (get_roundup is the same tool) and show that markdown to the user. The day follows the user's time zone. When nothing changed, that result is one short line and no card.",
   "Pass repos to start_session only for repositories the user explicitly named. Do not treat a missing list item as a deletion. A failed call is a failure, not a read.",
 ].join(" ");
 
@@ -58,7 +62,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "log_action",
     {
-      description: "Record a claim in the agent's own words. action is one of added, removed, modified, or read. read is counted with the lookups and is not checked against GitHub. added, removed, and modified are checked against GitHub when the session named repositories. Life Diff does not run the tool.",
+      description: "Record a change made outside Life Diff. Do not use this for a read, or for a tool already called through Life Diff. action is added, removed, modified, or read. Optional before and after are the old and new values, such as a moved event's times. Optional url is an https link to the object. Life Diff does not run the tool. A GitHub change is checked only when this session snapshotted GitHub. Anything else is shown as reported, not verified.",
       inputSchema: z.object({
         sessionId: z.string().optional(),
         tool: z.string(),
@@ -67,6 +71,9 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
         detail: z.string().optional(),
         resource: z.string().optional(),
         repo: z.string().optional(),
+        before: z.string().optional(),
+        after: z.string().optional(),
+        url: z.string().optional(),
       }),
     },
     async (input, ctx) => run(async () => {
@@ -77,7 +84,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "end_session",
     {
-      description: "Close the open session and return a short receipt. Omit sessionId to close the current session. Call this before your final reply to the user, and show the markdown.",
+      description: "Close the open session and return the receipt. Omit sessionId to close the current session. Show the markdown only when something changed. When nothing changed, the result is one short line and no card; rely on get_daily_diff instead. Optional claims may include before, after, and url.",
       inputSchema: z.object({
         sessionId: z.string().optional(),
         timeZone: z.string().optional(),
@@ -107,13 +114,13 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
         ...(shown.imageUrl ? { imageUrl: shown.imageUrl } : {}),
         ...(input.includeHtml ? { html: result.html } : {}),
       };
-      return shownContent(shown.markdown, shown.png, payload);
+      return shownContent(shown.markdown, shown.quiet ? new Uint8Array() : shown.png, payload);
     }),
   );
   server.registerTool(
     "get_receipt",
     {
-      description: "Read one saved Life Diff receipt by id. Show the returned markdown to the user.",
+      description: "Read one saved Life Diff receipt by id, including its card. Show the returned markdown to the user.",
       inputSchema: z.object({
         receiptId: z.string(),
         includeHtml: z.boolean().optional(),
@@ -141,7 +148,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "get_daily_diff",
     {
-      description: "Today's diff across every session and agent: what changed, what failed, and how many lookups. Defaults to the user's local day. Pass date (YYYY-MM-DD) for another day, since last_viewed for lines since the last time this was opened, or detail true to list each lookup. Show the markdown to the user.",
+      description: "Today's diff across every session and agent: what changed, what failed, and how many lookups. Defaults to the user's local day. Pass date (YYYY-MM-DD) for another day, since last_viewed for lines since the last time this was opened, or detail true to list each lookup. When nothing changed, this is one short line and no card. Show the markdown to the user. Rely on this at the end of the day instead of an empty receipt.",
       inputSchema: dailySchema,
     },
     daily,
@@ -247,14 +254,17 @@ function dailyHandler(env: Env) {
       },
     );
     const origin = env.ISSUER.replace(/\/$/, "");
-    return shownContent(roundup.markdown, roundup.png, {
+    return shownContent(roundup.markdown, roundup.quiet ? new Uint8Array() : roundup.png, {
       day: roundup.day,
       since: roundup.since,
       url: `${origin}/roundup/${roundup.day}`,
       ...(roundup.imageUrl ? { imageUrl: roundup.imageUrl } : {}),
       lines: roundup.lines.map((line) => ({
         service: line.service,
+        source: line.source,
         summary: line.summary,
+        tone: line.tone,
+        ...(line.trust ? { trust: line.trust } : {}),
         ...(line.id ? { id: line.id } : {}),
         ...(line.undo ? { undoHint: line.undo } : {}),
       })),

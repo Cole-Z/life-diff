@@ -1,4 +1,6 @@
 import { actionsToClaims, validateAction, type ActionInput } from "../actions/log";
+import { serviceFromTool } from "../receipt/names";
+import { isGitHubClaimService } from "../receipt/claims";
 import { newId, addDays, addHours, randomToken, validTimeZone } from "../text";
 import { DEFAULT_TIME_ZONE } from "../time";
 import { receiptCardKey, renderCardPng } from "../receipt/card";
@@ -11,7 +13,7 @@ import { renderHtml } from "../receipt/html";
 import type { ClaimInput, ClaimResult, Receipt, RecordedAction } from "../receipt/types";
 import { SessionBook, type LoggedAction, type NewAction, type OpenSession } from "../session/book";
 import type { Classification } from "../proxy/classify";
-import { boundJson } from "../proxy/redact";
+import { boundJson, redactSnippet } from "../proxy/redact";
 import { attachReadClaims, corroborateActions } from "../receipt/corroborate";
 import { phraseAction } from "../receipt/phrase";
 import type { MetadataStore, ObjectStore, ReceiptMeta } from "../storage/types";
@@ -149,12 +151,15 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
   const checkedAt = deps.now.toISOString();
   const logged = await deps.sessions.list(open.id);
   const folded = corroborateActions(logged);
-  const claims = combineClaims(logged, input.claims);
+  const foldedIds = new Set(folded.foldedClaimIds);
+  const prepared = prepareClaims(combineClaims(logged, input.claims)).filter((claim) => !claim.id || !foldedIds.has(claim.id));
+  const hasSnapshot = Boolean(open.snapshotKey);
+  const githubClaims = hasSnapshot ? prepared.filter((claim) => isGitHubClaimService(claim.service)) : [];
   const timeZone = input.timeZone && validTimeZone(input.timeZone) ? input.timeZone : open.timeZone;
   const receiptId = newId("rcpt", deps.now);
   const actions = folded.recorded;
   let receipt: Receipt;
-  if (!open.snapshotKey) {
+  if (!hasSnapshot) {
     receipt = buildActionReceipt({
       receiptId,
       startedAt: open.startedAt,
@@ -162,25 +167,18 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
       timeZone,
       actions,
     });
-    if (claims && claims.length > 0) {
-      receipt.claimsChecked = true;
-      receipt.claims = claims.map((claim, index): ClaimResult => ({
-        id: claim.id ?? `claim_${index + 1}`,
-        target: claim.target,
-        status: "missing",
-        reason: "This session did not snapshot GitHub, so Life Diff could not verify this claim.",
-        ...(claim.service ? { service: claim.service } : {}),
-        ...(claim.action ? { action: claim.action } : {}),
-        ...(claim.detail ? { detail: claim.detail } : {}),
-        ...(claim.repo ? { repo: claim.repo } : {}),
-      }));
-      receipt.counts = { ...receipt.counts, missingClaims: receipt.claims.length };
-      receipt.notes.push("Claims were not compared with GitHub because this session has no snapshot.");
-    }
   } else {
-    const github = await readGitHubReceipt(deps, open, { receiptId, checkedAt, timeZone, claims, actions, allowFailure: input.allowGitHubFailure === true });
+    const github = await readGitHubReceipt(deps, open, {
+      receiptId,
+      checkedAt,
+      timeZone,
+      claims: githubClaims.length > 0 ? githubClaims : null,
+      actions,
+      allowFailure: input.allowGitHubFailure === true,
+    });
     receipt = github;
   }
+  addUnverifiedClaims(receipt, hasSnapshot ? prepared.filter((claim) => !isGitHubClaimService(claim.service)) : prepared, hasSnapshot);
   attachReadClaims(receipt, folded.readClaims);
   const jsonKey = `receipts/${deps.userId}/${receiptId}.json`;
   const htmlKey = `receipts/${deps.userId}/${receiptId}.html`;
@@ -349,7 +347,7 @@ async function readGitHubReceipt(deps: AppDeps, open: OpenSession, input: {
     });
     if (input.actions.length > 0) {
       receipt.actions = input.actions;
-      receipt.notes.push("Tool calls Life Diff forwarded are marked Seen by Life Diff. They are not proof the service changed.");
+      receipt.notes.push("Tool calls Life Diff forwarded say Sent to that service, not verified. They are not proof the service changed.");
     }
     return receipt;
   } catch (error) {
@@ -432,8 +430,8 @@ export async function recordProxyCall(deps: CoreDeps, input: {
     tone: input.classification.tone,
     durationMs: input.durationMs,
     ...(input.classification.verb ? { verb: input.classification.verb } : {}),
-    ...(input.result ? { result: input.result.slice(0, 500) } : {}),
-    ...(input.error ? { error: input.error.slice(0, 500) } : {}),
+    ...(input.result ? { result: redactSnippet(input.result) } : {}),
+    ...(input.error ? { error: redactSnippet(input.error) } : {}),
     ...(input.client ? { client: input.client.slice(0, 80) } : {}),
   });
 }
@@ -450,32 +448,98 @@ export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId
   const tool = input.tool.trim();
   const target = input.target.trim();
   const read = normalized.action === "read";
+  const derived = serviceFromTool(tool);
+  const tone = read ? "read" as const : claimTone(normalized.action);
+  const verb = read ? "read" : claimVerb(normalized.action, normalized.before, normalized.after);
   return deps.sessions.log(open.id, {
     id: newId("act", deps.now),
     loggedAt: deps.now.toISOString(),
     tool,
     target,
     source: "claim",
-    ...normalized,
-    ...(input.detail?.trim() ? { detail: input.detail.trim() } : {}),
-    ...(input.client?.trim() ? { client: input.client.trim().slice(0, 80) } : {}),
-    ...(read ? {
-      upstream: tool,
-      effect: "read" as const,
-      tone: "read" as const,
-      verb: "read",
-      ok: true,
-      status: "ok",
-      arguments: { subject: target },
-      summary: phraseAction({
-        upstream: tool,
+    upstream: derived.display,
+    effect: read ? "read" : "write",
+    tone,
+    verb,
+    ok: true,
+    status: "ok",
+    arguments: {
+      subject: target,
+      ...(normalized.before ? { before: normalized.before } : {}),
+      ...(normalized.after ? { after: normalized.after } : {}),
+      ...(normalized.url ? { url: normalized.url } : {}),
+    },
+    summary: read
+      ? phraseAction({
+        upstream: derived.display,
         tool: "read",
         classification: { effect: "read", tone: "read", verb: "read" },
         subject: target,
         ok: true,
-      }),
-    } : {}),
+      })
+      : target,
+    ...normalized,
+    ...(input.detail?.trim() ? { detail: input.detail.trim() } : {}),
+    ...(input.client?.trim() ? { client: input.client.trim().slice(0, 80) } : {}),
   });
+}
+
+function claimTone(action: string | undefined): "created" | "changed" | "removed" {
+  switch (action) {
+    case "added":
+      return "created";
+    case "removed":
+      return "removed";
+    default:
+      return "changed";
+  }
+}
+
+function claimVerb(action: string | undefined, before?: string, after?: string): string {
+  if (action === "added") return "create";
+  if (action === "removed") return "delete";
+  if (before && after && (/\b(am|pm)\b/i.test(`${before} ${after}`) || /\d:\d\d/.test(`${before} ${after}`))) return "move";
+  return "update";
+}
+
+function prepareClaims(claims: ClaimInput[] | null): ClaimInput[] {
+  return (claims ?? []).map((claim, index) => ({
+    ...claim,
+    id: claim.id?.trim() || `claim-${index + 1}`,
+    target: claim.target.trim(),
+  }));
+}
+
+function addUnverifiedClaims(receipt: Receipt, claims: ClaimInput[], hasSnapshot: boolean): void {
+  if (claims.length === 0) return;
+  const have = new Set(receipt.claims.map((claim) => claim.id));
+  const added: ClaimResult[] = [];
+  for (const claim of claims) {
+    const id = claim.id?.trim() || `claim-${receipt.claims.length + added.length + 1}`;
+    if (have.has(id)) continue;
+    const github = isGitHubClaimService(claim.service);
+    added.push({
+      id,
+      target: claim.target,
+      status: "missing",
+      reason: github && !hasSnapshot
+        ? "This session did not snapshot GitHub, so Life Diff could not verify this claim."
+        : github
+          ? "No matching change showed up in GitHub."
+          : "Life Diff cannot check this service. This is what the agent reported.",
+      ...(claim.service ? { service: claim.service } : {}),
+      ...(claim.action ? { action: claim.action } : {}),
+      ...(claim.detail ? { detail: claim.detail } : {}),
+      ...(claim.repo ? { repo: claim.repo } : {}),
+      ...(claim.before ? { before: claim.before } : {}),
+      ...(claim.after ? { after: claim.after } : {}),
+      ...(claim.url ? { url: claim.url } : {}),
+    });
+  }
+  if (added.length === 0) return;
+  receipt.claimsChecked = true;
+  receipt.claims = [...receipt.claims, ...added];
+  receipt.counts = { ...receipt.counts, missingClaims: receipt.counts.missingClaims + added.length };
 }
 
 export async function getReceipt(deps: CoreDeps, receiptId: string): Promise<{ receipt: Receipt; html: string; meta: ReceiptMeta }> {

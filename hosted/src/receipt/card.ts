@@ -180,6 +180,7 @@ const FOLD: Record<string, string> = {
   "\u2019": "'",
   "\u201a": "'",
   "\u2026": ".",
+  "\u2192": "-",
 };
 
 /** Font key for a character. Empty means the character is skipped, never drawn as "?". */
@@ -229,7 +230,7 @@ function rect(pixels: Uint8Array, width: number, x: number, y: number, w: number
 
 /** Map punctuation onto glyphs this bitmap font actually has, then wrap instead of cutting the line off. */
 export function cardPlain(value: string): string {
-  return [...value].map((ch) => (ch === "\u2026" ? "..." : FOLD[ch] ?? ch)).join("");
+  return [...value].map((ch) => (ch === "\u2026" ? "..." : ch === "\u2192" ? "->" : FOLD[ch] ?? ch)).join("");
 }
 
 export function wrapCard(text: string, maxChars: number): string[] {

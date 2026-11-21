@@ -17,9 +17,11 @@ export function phraseAction(input: PhraseInput): string {
   const tool = input.tool.trim();
   const subject = usable(input.subject) || subjectFrom(input.args);
   const built = sentence(service, tool, input.classification, input.args, subject);
-  if (input.ok) return built.ok;
-  const reason = publicReason(input.error, tool);
-  return reason ? `${built.fail} ${reason}` : built.fail;
+  if (!input.ok) {
+    const reason = publicReason(input.error, tool);
+    return reason ? `Failed in ${service}. ${reason}` : `Failed in ${service}.`;
+  }
+  return built.ok;
 }
 
 export function repoOf(value: unknown): string | undefined {
@@ -58,6 +60,13 @@ function sentence(service: string, tool: string, classification: Classification,
   if (classification.verb === "send" || tool.includes("send")) {
     const what = title ? `'${title}'` : "something";
     return pair(`send ${what} from ${service}`, `Sent ${what} from ${service}`);
+  }
+  if (classification.verb === "revoke" || classification.verb === "unshare" || tool.includes("unshare") || tool.includes("revoke")) {
+    return pair(`change sharing in ${service}`, `Changed sharing in ${service}`);
+  }
+  if (classification.verb === "share" || tool.includes("share")) {
+    const what = title ? `'${title}'` : "something";
+    return pair(`share ${what} in ${service}`, `Shared ${what} in ${service}`);
   }
   if (classification.effect === "write") {
     const verb = writeVerb(classification, tool);
@@ -196,10 +205,14 @@ function findHttps(value: unknown): string | undefined {
   return undefined;
 }
 
+export function publicHttpsLink(value: string | undefined): string | undefined {
+  return acceptLink(value?.trim());
+}
+
 function acceptLink(value: string | undefined): string | undefined {
   if (!value || !value.startsWith("https://")) return undefined;
   if (/token|secret|password|sig=|key=/i.test(value)) return undefined;
-  return value.slice(0, 200);
+  return value.slice(0, 300);
 }
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {

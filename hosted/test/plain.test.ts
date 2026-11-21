@@ -73,8 +73,8 @@ describe("badges and grouping", () => {
     expect(markdown).toContain("**GitHub**");
     expect(markdown).toContain("cole-z/cardpost: 1 issue by Grok Bot");
     expect(markdown).toContain("Created issue #12 'Fix login' in cole-z/cardpost");
-    expect(markdown).toContain("Seen by Life Diff");
-    expect(markdown).not.toContain("Reported by the agent");
+    expect(markdown).toContain("Sent to GitHub, not verified");
+    expect(markdown).not.toContain("Agent says it did this, not verified");
     expect(markdown).toContain("**Notes**");
     expect(markdown).toContain("1 lookup");
     expect(markdown).not.toContain("create_issue");
@@ -105,7 +105,7 @@ describe("badges and grouping", () => {
       linkLabel: "Full receipt",
     });
     expect(markdown).toContain("Agent said it closed #4, but GitHub shows it still open.");
-    expect(markdown).toContain("Confirmed by GitHub");
+    expect(markdown).toContain("Verified in GitHub");
   });
 });
 
@@ -137,7 +137,7 @@ describe("logged reads", () => {
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
     expect(lines.find((item) => item.tone === "read")?.readCount).toBe(1);
     expect(lines.find((item) => item.tone === "read")?.summary).toBe("1 lookup");
-    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Reported by the agent");
+    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Agent says it did this, not verified");
     expect(JSON.stringify(lines)).not.toContain("deepwiki__");
   });
 });
@@ -189,12 +189,12 @@ describe("claim corroboration", () => {
     })]);
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
     expect(lines.find((item) => item.tone === "read")?.readCount).toBe(2);
-    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Seen by Life Diff");
+    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Sent to DeepWiki, not verified");
     const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
-    expect(day.markdown).toContain("Nothing changed · 2 lookups");
-    expect(day.markdown).toContain("Seen by Life Diff");
+    expect(day.markdown).toBe("Nothing changed · 2 lookups");
+    expect(day.lines.find((item) => item.tone === "read")?.trust).toBe("Sent to DeepWiki, not verified");
     expect(day.markdown).not.toContain("3 lookups");
-    expect(day.markdown).not.toContain("Reported by the agent");
+    expect(day.markdown).not.toContain("Agent says it did this, not verified");
   });
 
   it("still counts a read claim whose target does not match, and keeps its source", async () => {
@@ -220,7 +220,7 @@ describe("claim corroboration", () => {
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
     const reads = lines.filter((item) => item.tone === "read");
     expect(reads).toHaveLength(2);
-    expect(reads.map((item) => item.trust)).toEqual(["Seen by Life Diff", "Reported by the agent"]);
+    expect(reads.map((item) => item.trust)).toEqual(["Sent to DeepWiki, not verified", "Agent says it did this, not verified"]);
     expect(reads.reduce((sum, item) => sum + (item.readCount ?? 1), 0)).toBe(2);
   });
 });

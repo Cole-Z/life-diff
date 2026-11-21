@@ -102,6 +102,8 @@ A new provider adds an object here. It does not add a new top-level field.
 | `matchedChangeIds` | The change id that satisfied the claim. One claim matches at most one change. |
 | `reason` | Plain-language explanation. |
 
+Hosted receipts stay on schema `1.0.0`. A hosted claim may also include optional `before`, `after`, and `url`. Readers ignore fields they do not know. There is no migration.
+
 A change that no claim matched has `claimStatus` `unclaimed`. That is the third verdict. It lives on the change, not as a synthetic claim.
 
 ### Matching

@@ -60,10 +60,10 @@ MCP_SERVER_URL=http://localhost:8787/mcp
 MCP tools, all of which require the scopes `receipts:read` and `sessions:write`:
 
 - `start_session` opens a session. `repos` is optional. Life Diff snapshots only the repositories named there. With no repos, it records tool calls and does not read GitHub.
-- `end_session` closes the session and returns a short receipt. Show the markdown to the user.
+- `end_session` closes the session and returns a short receipt. Show the markdown only when something changed. When nothing changed, the result is one line and no card.
 - `get_daily_diff` returns the user's local day (optional `date`, optional `detail`). `get_roundup` is the same tool. Show the markdown. The signed-in page is `/roundup`, and a past day is `/roundup/YYYY-MM-DD`.
 - `get_receipt` returns one stored receipt.
-- `log_action` records a claim in the agent's words. Life Diff does not run the tool.
+- `log_action` records a change made outside Life Diff. Skip reads, and skip a tool already called through Life Diff. Life Diff does not run the tool. Optional `before`, `after`, and `url` name the old value, the new value, and a link.
 - `list_receipts` lists receipt metadata.
 - `add_upstream` registers an upstream MCP server (name, https URL, optional token or header). The token is encrypted and not returned.
 - `list_upstreams` lists name, URL, and whether a token is stored.
@@ -81,13 +81,13 @@ npx wrangler deploy
 
 The same action log is available as `POST /v1/sessions/:id/actions` with the Life Diff bearer token. `DELETE /v1/me` deletes the account. Signed-in browsers can use `POST /account/delete` (the account page includes a CSRF token).
 
-`log_action` records a claim in the agent's words. Added, removed, and modified claims are checked against the GitHub diff when the names line up. A read claim that matches a call this session already forwarded is counted once with that call. Unknown actions do not match. One claim matches one change.
+`log_action` records a change the agent made outside Life Diff. The service comes from the tool name (`google_calendar` is Google Calendar). A claim is compared with GitHub only when the service is GitHub and this session has a snapshot. Anything else stays on the receipt as reported, not verified. A read claim that matches a call this session already forwarded is counted once with that call. Unknown actions do not match. One claim matches one change.
 
 ## Receipts
 
 Receipts use schema `1.0.0`, the same top-level shape as the Go core (`docs/receipt-schema.md` on the core PR). Readers ignore unknown fields. Hosted receipts add a top-level `github` object, parallel to `calendar` and `drive`, and changes may include `resourceType`, `repo`, `actor`, `viaApp`, and `labelsChanged`. File `content` is a line count such as `+10 −2`, not a patch or file body.
 
-The HTML report uses the same labels and colors as the core report: Added `#0f5c32`, Removed `#8d1c1c`, Modified `#6b4300`, and gray for read-only calls. Calls are grouped by service, writes first, reads collapsed. A forwarded call is labeled Seen by Life Diff. A lookup only the agent reported is labeled Reported by the agent. GitHub changes are labeled Confirmed by GitHub. Links on GitHub rows are limited to `https://github.com`. A signed-in browser can open `/receipts/<id>` with the session cookie set at GitHub sign-in.
+The HTML report uses the same labels and colors as the core report: Added `#0f5c32`, Removed `#8d1c1c`, Modified `#6b4300`, and gray for read-only calls. An unverified claim uses the amber modified color. A failure or a delete, send, or permission change uses red. Lines that need a look come first, then checked changes, then one collapsed lookups line per service. A checked change is labeled Verified in that service. A forwarded call is labeled Sent to that service, not verified. A change only the agent reported is labeled Agent says it did this, not verified. Lookups stay short and omit that badge. Links on GitHub rows are limited to `https://github.com`. A signed-in browser can open `/receipts/<id>` with the session cookie set at GitHub sign-in.
 
 ## How a session is stored
 

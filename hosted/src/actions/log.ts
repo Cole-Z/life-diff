@@ -1,4 +1,6 @@
 import { normalizeAction } from "../receipt/claims";
+import { serviceFromTool } from "../receipt/names";
+import { publicHttpsLink } from "../receipt/phrase";
 import type { ClaimInput } from "../receipt/types";
 import type { LoggedAction } from "../session/book";
 
@@ -13,9 +15,12 @@ export interface ActionInput {
   detail?: string;
   resource?: string;
   repo?: string;
+  before?: string;
+  after?: string;
+  url?: string;
 }
 
-export function validateAction(input: ActionInput): { action?: string; resource?: string; repo?: string } {
+export function validateAction(input: ActionInput): { action?: string; resource?: string; repo?: string; before?: string; after?: string; url?: string } {
   const tool = input.tool.trim();
   const target = input.target.trim();
   if (!tool) throw new Error("tool is required");
@@ -45,20 +50,56 @@ export function validateAction(input: ActionInput): { action?: string; resource?
     if (!/^[\w.-]+\/[\w.-]+$/.test(input.repo.trim())) throw new Error("repo must look like owner/name");
     repo = input.repo.trim();
   }
-  return { ...(action ? { action } : {}), ...(resource ? { resource } : {}), ...(repo ? { repo } : {}) };
+  const before = bounded(input.before, "before");
+  const after = bounded(input.after, "after");
+  let url: string | undefined;
+  if (input.url && input.url.trim()) {
+    const link = publicHttpsLink(input.url);
+    if (!link) throw new Error("url must be an https link");
+    url = link;
+  }
+  return {
+    ...(action ? { action } : {}),
+    ...(resource ? { resource } : {}),
+    ...(repo ? { repo } : {}),
+    ...(before ? { before } : {}),
+    ...(after ? { after } : {}),
+    ...(url ? { url } : {}),
+  };
+}
+
+function bounded(value: string | undefined, name: string): string | undefined {
+  if (!value?.trim()) return undefined;
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (trimmed.length > 200) throw new Error(`${name} is too long`);
+  return trimmed;
 }
 
 export function actionsToClaims(actions: LoggedAction[]): ClaimInput[] {
   return actions.filter((action) => action.source !== "proxy" && action.action !== "read" && action.effect !== "read").map((action) => {
+    const derived = serviceFromTool(action.tool);
     const detail = [action.tool ? `Tool ${action.tool}` : "", action.detail ?? ""].filter(Boolean).join(". ");
+    const args = action.arguments && typeof action.arguments === "object" && !Array.isArray(action.arguments)
+      ? action.arguments as Record<string, unknown>
+      : undefined;
     const claim: ClaimInput = {
       id: action.id,
-      service: action.resource || "github",
+      service: derived.key === "github" ? (action.resource || "github") : derived.display,
       target: action.target,
     };
     if (action.action) claim.action = action.action;
     if (detail) claim.detail = detail;
     if (action.repo) claim.repo = action.repo;
+    const before = textArg(args?.before);
+    const after = textArg(args?.after);
+    const url = textArg(args?.url);
+    if (before) claim.before = before;
+    if (after) claim.after = after;
+    if (url) claim.url = url;
     return claim;
   });
+}
+
+function textArg(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

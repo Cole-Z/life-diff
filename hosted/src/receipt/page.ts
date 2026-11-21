@@ -1,5 +1,5 @@
 import { escapeHtml } from "../text";
-import { markerFor, serviceLabel, trustLabel, type StoryLine } from "./story";
+import { displayTone, lineMarker, serviceLabel, trustLabel, type StoryLine } from "./story";
 
 const ICON_ADDED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7 1h2v14H7zM1 7h14v2H1z"/></svg>`;
 const ICON_REMOVED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 7h14v2H1z"/></svg>`;
@@ -196,8 +196,7 @@ function renderLine(line: StoryLine, showClient: boolean): string {
   }
   if (line.tone === "read" && line.details && line.details.length > 0 && line.readCount) {
     const items = line.details.map((detail) => `<li>${escapeHtml(detail.text)}</li>`).join("");
-    const trust = line.trust ? ` · ${line.trust}` : "";
-    return `<details class="reads"><summary>${escapeHtml(markerFor(line.tone))} ${escapeHtml(line.summary)}${escapeHtml(trust)}${escapeHtml(who)}</summary><ul>${items}</ul></details>`;
+    return `<details class="reads"><summary>${escapeHtml(lineMarker(line))} ${escapeHtml(line.summary)}${escapeHtml(who)}</summary><ul>${items}</ul></details>`;
   }
   const pairs = (line.details ?? []).filter((detail) => detail.before || detail.after);
   const extras = (line.details ?? []).filter((detail) => !detail.before && !detail.after);
@@ -211,11 +210,11 @@ function renderLine(line: StoryLine, showClient: boolean): string {
     : "";
   const link = line.link?.startsWith("https://") ? `<p><a href="${escapeHtml(line.link)}">Open</a></p>` : "";
   const undo = line.hint ? `<p class="undo">${escapeHtml(line.hint)}</p>` : "";
-  const badge = line.trust ?? trustLabel(line.source);
+  const badge = line.tone === "read" ? "" : (line.trust ?? trustLabel(line.source, line.service));
   const trust = badge || who ? `<div class="meta"><span class="tag">${escapeHtml(`${badge}${who}`)}</span></div>` : "";
-  return `<article class="row is-${line.tone}">
+  return `<article class="row is-${displayTone(line)}">
     ${trust}
-    <p class="summary">${escapeHtml(markerFor(line.tone))} ${escapeHtml(line.summary)}</p>
+    <p class="summary">${escapeHtml(lineMarker(line))} ${escapeHtml(line.summary)}</p>
     ${compare}
     ${undo}
     ${more}

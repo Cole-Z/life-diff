@@ -42,10 +42,11 @@ export function buildReceipt(input: {
     claimsChecked: input.claims !== null,
     claims: applied.claims,
     notes: [
-      "This receipt is from GitHub's records, not from what the agent said.",
+      "Verified in a service means Life Diff checked that service's own history.",
+      "Sent to a service means Life Diff forwarded the call. That is not proof the service changed.",
+      "Agent says it did this means the agent reported the change and Life Diff could not check it.",
       "Life Diff only read data. It did not change GitHub.",
       "File bodies are not stored. A file change lists the path and a short size summary.",
-      "Claimed actions are what an agent logged through Life Diff. Verified means GitHub shows a matching change.",
       `Times are shown in ${input.timeZone}.`,
     ],
   };
@@ -107,8 +108,9 @@ export function buildActionReceipt(input: {
     claims: [],
     actions: input.actions,
     notes: [
-      "A call Life Diff forwarded is marked Seen by Life Diff. A lookup only the agent reported is marked Reported by the agent.",
-      "A proxied call is not proof the service changed. Verified lines come from a service that exposes history, such as GitHub.",
+      "Verified in a service means Life Diff checked that service's own history.",
+      "Sent to a service means Life Diff forwarded the call. That is not proof the service changed.",
+      "Agent says it did this means the agent reported the change and Life Diff could not check it.",
       "Life Diff did not run a GitHub snapshot for this session, so there is no verified GitHub diff.",
       `Times are shown in ${input.timeZone}.`,
     ],

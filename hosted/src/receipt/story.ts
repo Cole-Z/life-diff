@@ -12,9 +12,26 @@ export interface StoryDetail {
   after?: string;
 }
 
+export type LineSource = "proxy" | "claim" | "verified";
+
+export function trustLabel(source: LineSource): string {
+  switch (source) {
+    case "proxy":
+      return "Seen by Life Diff";
+    case "claim":
+      return "Reported by the agent";
+    case "verified":
+      return "Confirmed by GitHub";
+    default: {
+      const never: never = source;
+      return never;
+    }
+  }
+}
+
 export interface StoryLine {
   service: string;
-  source: "proxy" | "verified";
+  source: LineSource;
   write: boolean;
   tone: StoryTone;
   summary: string;
@@ -69,26 +86,29 @@ export function condenseLines(lines: StoryLine[], input: { detail: boolean }): S
   const rest: StoryLine[] = [];
   for (const line of collapsed) {
     if (!input.detail && line.tone === "read") {
-      const group = reads.get(line.service) ?? [];
+      const key = `${line.source}\0${line.service}`;
+      const group = reads.get(key) ?? [];
       group.push(line);
-      reads.set(line.service, group);
+      reads.set(key, group);
       continue;
     }
     rest.push(line);
   }
   const folded: StoryLine[] = [...rest];
-  for (const [service, items] of reads) {
+  for (const items of reads.values()) {
+    const first = items[0];
+    if (!first) continue;
     const noun = items.length === 1 ? "lookup" : "lookups";
     const clients = new Set(items.map((item) => item.client).filter((client): client is string => Boolean(client)));
     folded.push({
-      service,
-      source: "proxy",
+      service: first.service,
+      source: first.source,
       write: false,
       tone: "read",
       summary: `${items.length} ${noun}`,
-      seed: `reads:${service}:${items.map((item) => item.seed).join(",")}`,
+      seed: `reads:${first.source}:${first.service}:${items.map((item) => item.seed).join(",")}`,
       readCount: items.length,
-      trust: "Reported by the agent",
+      trust: trustLabel(first.source),
       details: items.map((item) => ({ text: item.summary })),
       ...(clients.size === 1 ? { client: [...clients][0] } : {}),
     });
@@ -136,13 +156,12 @@ export function renderStory(input: {
   return parts.join("\n");
 }
 
-export function headlineFor(lines: StoryLine[], label: string): string {
+/** Session receipts and the daily page use the same wording. `label` is the card caption, not this line. */
+export function headlineFor(lines: StoryLine[], _label: string): string {
   const counts = countStory(lines);
   const writes = counts.added + counts.modified + counts.removed;
-  const session = label === "This session";
   if (writes === 0 && counts.failed === 0) {
-    if (counts.reads === 0) return session ? "Read-only session" : "Nothing changed";
-    if (session) return "Read-only session";
+    if (counts.reads === 0) return "Nothing changed";
     const noun = counts.reads === 1 ? "lookup" : "lookups";
     return `Nothing changed · ${counts.reads} ${noun}`;
   }
@@ -219,9 +238,10 @@ export function assignIds(lines: StoryLine[]): StoryLine[] {
 
 function actionLine(action: RecordedAction): StoryLine {
   const presented = presentAction(action);
+  const source = action.source === "claim" ? "claim" : "proxy";
   return {
     service: action.upstream || "unknown",
-    source: "proxy",
+    source,
     write: presented.write,
     tone: presented.tone,
     summary: presented.summary,
@@ -229,7 +249,7 @@ function actionLine(action: RecordedAction): StoryLine {
     time: action.time,
     callKey: `${action.upstream}\0${action.tool}\0${stable(action.arguments)}`,
     ok: action.ok,
-    trust: "Reported by the agent",
+    trust: trustLabel(source),
     ...(presented.repo ? { repo: presented.repo } : {}),
     ...(presented.link ? { link: presented.link } : {}),
     ...(presented.hint ? { hint: presented.hint, undo: presented.hint } : {}),
@@ -274,7 +294,7 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
         summary: `Changed ${stat.count} files on ${repo} · ${statText(stat)}`,
         seed: `${receiptId}:files:${repo}`,
         repo,
-        trust: "Confirmed by GitHub",
+        trust: trustLabel("verified"),
         details: files.map(fileDetail),
         link: files.find((file) => file.link)?.link,
       });
@@ -296,7 +316,7 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
         summary: `${comments.length} comments on ${repo}`,
         seed: `${receiptId}:comments:${repo}`,
         repo,
-        trust: "Confirmed by GitHub",
+        trust: trustLabel("verified"),
         details: comments.map((comment) => ({ text: comment.summary })),
         link: comments.find((comment) => comment.link)?.link,
       });
@@ -316,7 +336,7 @@ function changeLine(receiptId: string, change: Change, summary: string, details:
     seed: `${receiptId}:${change.id}`,
     time: change.occurredAt,
     repo: change.repo,
-    trust: "Confirmed by GitHub",
+    trust: trustLabel("verified"),
     ...(details.length > 0 ? { details } : {}),
     ...(change.link ? { link: change.link } : {}),
     ...(hint ? { hint, undo: hint } : {}),
@@ -515,14 +535,16 @@ function mismatchLines(actions: RecordedAction[], changes: Change[]): StoryLine[
     });
     if (!stillOpen || closed) continue;
     const repo = related[0]?.repo;
+    const source = action.source === "claim" ? "claim" : "proxy";
     lines.push({
       service: "GitHub",
-      source: "proxy",
+      source,
       write: true,
       tone: "failed",
       summary: `Agent said it closed #${number}, but GitHub shows it still open.`,
       seed: `mismatch:${action.id}`,
       time: action.time,
+      trust: trustLabel(source),
       ...(repo ? { repo } : {}),
     });
   }

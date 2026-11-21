@@ -1,5 +1,5 @@
 import { escapeHtml } from "../text";
-import { markerFor, serviceLabel, type StoryLine } from "./story";
+import { markerFor, serviceLabel, trustLabel, type StoryLine } from "./story";
 
 const ICON_ADDED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7 1h2v14H7zM1 7h14v2H1z"/></svg>`;
 const ICON_REMOVED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 7h14v2H1z"/></svg>`;
@@ -146,18 +146,17 @@ export function renderDiffPage(input: {
 </html>`;
 }
 
-function group(lines: StoryLine[]): { service: string; source: StoryLine["source"]; lines: StoryLine[] }[] {
-  const groups = new Map<string, { service: string; source: StoryLine["source"]; lines: StoryLine[] }>();
+function group(lines: StoryLine[]): { service: string; lines: StoryLine[] }[] {
+  const groups = new Map<string, { service: string; lines: StoryLine[] }>();
   for (const line of lines) {
-    const key = `${line.source}\0${line.service}`;
-    const existing = groups.get(key) ?? { service: line.service, source: line.source, lines: [] };
+    const existing = groups.get(line.service) ?? { service: line.service, lines: [] };
     existing.lines.push(line);
-    groups.set(key, existing);
+    groups.set(line.service, existing);
   }
   return [...groups.values()];
 }
 
-function renderGroup(groupLines: { service: string; source: StoryLine["source"]; lines: StoryLine[] }, showClient: boolean): string {
+function renderGroup(groupLines: { service: string; lines: StoryLine[] }, showClient: boolean): string {
   const letter = (groupLines.service.trim().charAt(0) || "S").toUpperCase();
   const repos = new Map<string, StoryLine[]>();
   for (const line of groupLines.lines) {
@@ -212,7 +211,8 @@ function renderLine(line: StoryLine, showClient: boolean): string {
     : "";
   const link = line.link?.startsWith("https://") ? `<p><a href="${escapeHtml(line.link)}">Open</a></p>` : "";
   const undo = line.hint ? `<p class="undo">${escapeHtml(line.hint)}</p>` : "";
-  const trust = line.trust || who ? `<div class="meta"><span class="tag">${escapeHtml(`${line.trust ?? "Reported by the agent"}${who}`)}</span></div>` : "";
+  const badge = line.trust ?? trustLabel(line.source);
+  const trust = badge || who ? `<div class="meta"><span class="tag">${escapeHtml(`${badge}${who}`)}</span></div>` : "";
   return `<article class="row is-${line.tone}">
     ${trust}
     <p class="summary">${escapeHtml(markerFor(line.tone))} ${escapeHtml(line.summary)}</p>

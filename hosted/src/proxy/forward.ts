@@ -5,9 +5,10 @@ import { callUpstreamTool, UpstreamError, type UpstreamTarget } from "./client";
 import { boundJson, pickSubject, scrubSecrets } from "./redact";
 
 export interface ToolReply {
-  content: { type: "text"; text: string }[];
+  content: { type: "text"; text: string; _meta?: Record<string, unknown> }[];
   isError?: boolean;
   structuredContent?: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
 }
 
 export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, target: UpstreamTarget, tool: string, args: unknown, client?: string): Promise<ToolReply> {
@@ -20,7 +21,7 @@ export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, t
     const failed = result.isError === true;
     const resultText = scrubSecrets(firstText(result), secrets);
     const summary = plainAction(target.name, classification, pickSubject(boundJson(args)), !failed, tool);
-    await recordSafe(deps, {
+    const sessionId = await recordSafe(deps, {
       upstream: target.name,
       tool,
       args,
@@ -33,12 +34,12 @@ export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, t
       ...(failed ? { error: resultText || "The upstream reported an error." } : {}),
       ...(client ? { client } : {}),
     });
-    return replyFrom(result, target.name, tool);
+    return withSession(replyFrom(result, target.name, tool), sessionId);
   } catch (error) {
     const durationMs = Date.now() - started;
     const message = scrubSecrets(error instanceof UpstreamError || error instanceof Error ? error.message : "The upstream call failed.", secrets);
     const summary = plainAction(target.name, classification, pickSubject(boundJson(args)), false, tool);
-    await recordSafe(deps, {
+    const sessionId = await recordSafe(deps, {
       upstream: target.name,
       tool,
       args,
@@ -50,10 +51,10 @@ export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, t
       error: message,
       ...(client ? { client } : {}),
     });
-    return {
+    return withSession({
       isError: true,
       content: [{ type: "text", text: message || `${target.name} failed.` }],
-    };
+    }, sessionId);
   }
 }
 
@@ -69,12 +70,23 @@ async function recordSafe(deps: CoreDeps, input: {
   result?: string;
   error?: string;
   client?: string;
-}): Promise<void> {
+}): Promise<string | undefined> {
   try {
-    await recordProxyCall(deps, input);
+    const logged = await recordProxyCall(deps, input);
+    return logged.sessionId;
   } catch {
     // The agent still receives the upstream result when the log cannot be written.
+    return undefined;
   }
+}
+
+function withSession(reply: ToolReply, sessionId: string | undefined): ToolReply {
+  if (!sessionId) return reply;
+  return {
+    ...reply,
+    content: [...reply.content, { type: "text", text: `Life Diff session ${sessionId}.`, _meta: { sessionId } }],
+    _meta: { ...(reply._meta ?? {}), sessionId },
+  };
 }
 
 function replyFrom(result: Record<string, unknown>, upstream: string, tool: string): ToolReply {

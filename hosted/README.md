@@ -81,13 +81,13 @@ npx wrangler deploy
 
 The same action log is available as `POST /v1/sessions/:id/actions` with the Life Diff bearer token. `DELETE /v1/me` deletes the account. Signed-in browsers can use `POST /account/delete` (the account page includes a CSRF token).
 
-`log_action` is a pass-through record. If an agent routes a tool call through Life Diff, the receipt shows it as a claimed action and checks it against the GitHub diff when the names line up. Unknown actions do not match. One claim matches one change.
+`log_action` records a claim in the agent's words. Added, removed, and modified claims are checked against the GitHub diff when the names line up. A read claim that matches a call this session already forwarded is counted once with that call. Unknown actions do not match. One claim matches one change.
 
 ## Receipts
 
 Receipts use schema `1.0.0`, the same top-level shape as the Go core (`docs/receipt-schema.md` on the core PR). Readers ignore unknown fields. Hosted receipts add a top-level `github` object, parallel to `calendar` and `drive`, and changes may include `resourceType`, `repo`, `actor`, `viaApp`, and `labelsChanged`. File `content` is a line count such as `+10 −2`, not a patch or file body.
 
-The HTML report uses the same labels and colors as the core report: Added `#0f5c32`, Removed `#8d1c1c`, Modified `#6b4300`, and gray for read-only proxy calls. Proxied tool calls are grouped by service, writes first, reads collapsed, and labeled reported by proxy. GitHub changes are labeled verified from service history. Links on GitHub rows are limited to `https://github.com`. A signed-in browser can open `/receipts/<id>` with the session cookie set at GitHub sign-in.
+The HTML report uses the same labels and colors as the core report: Added `#0f5c32`, Removed `#8d1c1c`, Modified `#6b4300`, and gray for read-only calls. Calls are grouped by service, writes first, reads collapsed. A forwarded call is labeled Seen by Life Diff. A lookup only the agent reported is labeled Reported by the agent. GitHub changes are labeled Confirmed by GitHub. Links on GitHub rows are limited to `https://github.com`. A signed-in browser can open `/receipts/<id>` with the session cookie set at GitHub sign-in.
 
 ## How a session is stored
 

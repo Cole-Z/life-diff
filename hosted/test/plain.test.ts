@@ -35,10 +35,12 @@ describe("headlines", () => {
     const read = line("read", false);
     const write = line("created", true);
     const failed = line("failed", false);
-    expect(headlineFor([], "This session")).toBe("Read-only session");
+    expect(headlineFor([], "This session")).toBe("Nothing changed");
     expect(headlineFor([], "Today")).toBe("Nothing changed");
     expect(headlineFor([read, read], "Today")).toBe("Nothing changed · 2 lookups");
-    expect(headlineFor([read], "This session")).toBe("Read-only session");
+    expect(headlineFor([read, read], "This session")).toBe("Nothing changed · 2 lookups");
+    expect(headlineFor([read], "This session")).toBe("Nothing changed · 1 lookup");
+    expect(headlineFor([write, failed], "This session")).toBe("1 thing changed, 1 needs a look");
     expect(headlineFor([failed], "Today")).toBe("1 action failed");
     expect(headlineFor([failed, failed], "Today")).toBe("2 actions failed");
     expect(headlineFor([write, write], "Today")).toBe("2 things changed");
@@ -71,7 +73,8 @@ describe("badges and grouping", () => {
     expect(markdown).toContain("**GitHub**");
     expect(markdown).toContain("cole-z/cardpost: 1 issue by Grok Bot");
     expect(markdown).toContain("Created issue #12 'Fix login' in cole-z/cardpost");
-    expect(markdown).toContain("Reported by the agent");
+    expect(markdown).toContain("Seen by Life Diff");
+    expect(markdown).not.toContain("Reported by the agent");
     expect(markdown).toContain("**Notes**");
     expect(markdown).toContain("1 lookup");
     expect(markdown).not.toContain("create_issue");
@@ -123,14 +126,102 @@ describe("logged reads", () => {
     const deps = base(book);
     const started = await startSession(deps, {});
     const logged = await logAction(deps, { sessionId: started.sessionId, tool: "deepwiki", action: "read", target: "x" });
+    expect(logged.source).toBe("claim");
     expect(logged.effect).toBe("read");
     expect(logged.tone).toBe("read");
     const ended = await endSession(deps, {});
+    expect(ended.receipt.actions?.[0]?.source).toBe("claim");
+    expect(ended.receipt.claimsChecked).toBe(true);
+    expect(ended.receipt.claims).toHaveLength(1);
+    expect(ended.receipt.claims[0]?.status).toBe("missing");
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
     expect(lines.find((item) => item.tone === "read")?.readCount).toBe(1);
     expect(lines.find((item) => item.tone === "read")?.summary).toBe("1 lookup");
-    expect(ended.receipt.claims).toHaveLength(0);
+    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Reported by the agent");
     expect(JSON.stringify(lines)).not.toContain("deepwiki__");
+  });
+});
+
+describe("claim corroboration", () => {
+  it("counts a read claim that matches a proxied call once, on the receipt and the day", async () => {
+    const book = new SessionBook();
+    const deps = base(book);
+    await startSession(deps, {});
+    await recordProxyCall(deps, {
+      upstream: "deepwiki",
+      tool: "read_wiki_structure",
+      args: { repoName: "facebook/react" },
+      ok: true,
+      status: "ok",
+      summary: "Looked up the docs outline for facebook/react in DeepWiki.",
+      classification: { effect: "read", tone: "read", verb: "read" },
+      durationMs: 4,
+    });
+    await recordProxyCall(deps, {
+      upstream: "deepwiki",
+      tool: "read_wiki_contents",
+      args: { repoName: "facebook/react" },
+      ok: true,
+      status: "ok",
+      summary: "Looked up the docs for facebook/react in DeepWiki.",
+      classification: { effect: "read", tone: "read", verb: "read" },
+      durationMs: 4,
+    });
+    const logged = await logAction(deps, { tool: "deepwiki", action: "read", target: "facebook/react wiki structure" });
+    expect(logged.source).toBe("claim");
+    const open = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
+    expect(open.markdown).toContain("Nothing changed · 2 lookups");
+    expect(open.markdown).not.toContain("3 lookups");
+    const ended = await endSession(deps, {});
+    expect(book.getOpen()).toBeNull();
+    expect(ended.receipt.actions).toHaveLength(2);
+    expect(ended.receipt.actions?.every((action) => action.source === "proxy")).toBe(true);
+    const corroborated = ended.receipt.actions?.filter((action) => action.corroborated);
+    expect(corroborated).toHaveLength(1);
+    expect(corroborated?.[0]?.tool).toBe("read_wiki_structure");
+    expect(ended.receipt.claimsChecked).toBe(true);
+    expect(ended.receipt.claims).toEqual([expect.objectContaining({
+      action: "read",
+      status: "verified",
+      corroborated: true,
+      target: "facebook/react wiki structure",
+      matchedActionId: corroborated?.[0]?.id,
+    })]);
+    const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
+    expect(lines.find((item) => item.tone === "read")?.readCount).toBe(2);
+    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Seen by Life Diff");
+    const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
+    expect(day.markdown).toContain("Nothing changed · 2 lookups");
+    expect(day.markdown).toContain("Seen by Life Diff");
+    expect(day.markdown).not.toContain("3 lookups");
+    expect(day.markdown).not.toContain("Reported by the agent");
+  });
+
+  it("still counts a read claim whose target does not match, and keeps its source", async () => {
+    const book = new SessionBook();
+    const deps = base(book);
+    await startSession(deps, {});
+    await recordProxyCall(deps, {
+      upstream: "deepwiki",
+      tool: "read_wiki_structure",
+      args: { repoName: "facebook/react" },
+      ok: true,
+      status: "ok",
+      summary: "Looked up the docs outline for facebook/react in DeepWiki.",
+      classification: { effect: "read", tone: "read", verb: "read" },
+      durationMs: 4,
+    });
+    await logAction(deps, { tool: "deepwiki", action: "read", target: "vuejs/core wiki structure" });
+    const ended = await endSession(deps, {});
+    expect(ended.receipt.actions).toHaveLength(2);
+    expect(ended.receipt.actions?.map((action) => action.source)).toEqual(["proxy", "claim"]);
+    expect(ended.receipt.actions?.some((action) => action.corroborated)).toBe(false);
+    expect(ended.receipt.claims[0]?.status).toBe("missing");
+    const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
+    const reads = lines.filter((item) => item.tone === "read");
+    expect(reads).toHaveLength(2);
+    expect(reads.map((item) => item.trust)).toEqual(["Seen by Life Diff", "Reported by the agent"]);
+    expect(reads.reduce((sum, item) => sum + (item.readCount ?? 1), 0)).toBe(2);
   });
 });
 

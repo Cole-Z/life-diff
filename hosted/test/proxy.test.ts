@@ -155,10 +155,15 @@ describe("upstream forwarding", () => {
     const ok = await forwardToolCall(deps, fetchImpl, target, "create_page", { title: "Q2 goals", token: "sekret-value" });
     expect(ok.isError).toBeUndefined();
     expect(ok.content[0]?.text).toContain("created");
+    expect(ok._meta?.sessionId).toBe(book.getOpen()?.id);
+    expect(ok.content.at(-1)?.text).toBe(`Life Diff session ${book.getOpen()?.id}.`);
+    expect(ok.content.at(-1)?._meta).toEqual({ sessionId: book.getOpen()?.id });
     expect(book.getOpen()?.snapshotKey).toBe("");
     const failed = await forwardToolCall({ ...deps, now: new Date("2026-04-02T15:05:00.000Z") }, fetchImpl, target, "delete_page", { title: "Q2 goals" });
     expect(failed.isError).toBe(true);
     expect(failed.content[0]?.text).not.toContain("sekret-value");
+    expect(failed._meta?.sessionId).toBe(book.getOpen()?.id);
+    expect(JSON.stringify(failed)).not.toContain("sekret-value");
     const open = book.getOpen();
     expect(open).toBeTruthy();
     const logged = book.list(open!.id);
@@ -180,7 +185,7 @@ describe("upstream forwarding", () => {
     expect(ended.receipt.actions).toHaveLength(3);
     expect(ended.receipt.actions?.[0]?.summary).toBe("Created page 'Q2 goals' in Notes.");
     expect(ended.receipt.changes).toHaveLength(0);
-    expect(ended.html).toContain("Reported by the agent");
+    expect(ended.html).toContain("Seen by Life Diff");
     expect(ended.html).toContain("Verified lines come from a service");
     expect(ended.html.indexOf("Created page &#39;Q2 goals&#39;")).toBeLessThan(ended.html.indexOf("<details class=\"reads\">"));
     expect(ended.html).not.toContain("sekret");
@@ -210,6 +215,9 @@ describe("auto session and upstream secrets", () => {
     const again = await ensureSession(deps);
     expect(again.id).toBe(logged.sessionId);
     expect(JSON.stringify(logged.arguments)).not.toContain("nope");
+    const ended = await endSession({ ...deps, github: idleGithub() }, {});
+    expect(book.getOpen()).toBeNull();
+    expect(ended.receipt.actions?.[0]?.source).toBe("proxy");
   });
 
   it("stores an upstream token encrypted and does not return it", async () => {
@@ -260,7 +268,7 @@ describe("auto session and upstream secrets", () => {
     });
     expect(html).toContain("<details class=\"reads\">");
     expect(html).toContain("badge-read");
-    expect(html).toContain("Reported by the agent");
+    expect(html).toContain("Seen by Life Diff");
   });
 });
 

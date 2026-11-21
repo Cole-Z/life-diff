@@ -1,3 +1,4 @@
+import { redactText } from "../proxy/redact";
 import { assertNever } from "../text";
 import { dedupeStoredReads } from "./corroborate";
 import { serviceForClaim } from "./claims";
@@ -65,23 +66,12 @@ export function visibleActions(receipt: Pick<Receipt, "actions" | "claims">): Re
 
 export function storyFromReceipt(receipt: Receipt): StoryLine[] {
   const actions = visibleActions(receipt);
-  const lines = [
+  return [
     ...storyFromActions(actions),
     ...storyFromChanges(receipt.id, receipt.changes),
     ...storyFromUnverifiedClaims(receipt.claims, new Set(actions.map((action) => action.id))),
     ...mismatchLines(actions, receipt.changes),
   ];
-  if (receipt.github.repos.length === 0 && receipt.github.optIn !== true) {
-    lines.push({
-      service: "GitHub",
-      source: "verified",
-      write: false,
-      tone: "note",
-      summary: "GitHub not checked this session",
-      seed: `${receipt.id}:github-off`,
-    });
-  }
-  return lines;
 }
 
 export function storyFromActions(actions: RecordedAction[]): StoryLine[] {
@@ -138,7 +128,10 @@ export function renderStory(input: {
 }): string {
   const max = input.maxLines ?? MAX_CHAT_LINES;
   const notes = input.lines.filter((line) => line.tone === "note");
-  const body = input.lines.filter((line) => line.tone !== "note").slice(0, max);
+  const bodyAll = input.lines.filter((line) => line.tone !== "note");
+  const body = Number.isFinite(max) ? bodyAll.slice(0, max) : bodyAll;
+  const hidden = bodyAll.length - body.length;
+  const showReadTrust = lookupSourcesMixed(bodyAll);
   const clients = new Set(body.map((line) => line.client).filter((client): client is string => Boolean(client)));
   const showClient = clients.size > 1;
   const parts = [input.headline, ""];
@@ -159,13 +152,14 @@ export function renderStory(input: {
         parts.push(repoHeading(repo, group, showClient));
       }
     }
-    parts.push(formatLine(line, showClient && !line.repo));
+    parts.push(formatLine(line, showClient && !line.repo, showReadTrust));
   }
+  if (hidden > 0) parts.push(`+${hidden} more`);
   for (const note of notes) {
     parts.push("", note.summary.endsWith(".") ? note.summary : `${note.summary}.`);
   }
   parts.push("", `${input.linkLabel}: ${input.link}`);
-  return parts.join("\n");
+  return redactText(parts.join("\n"));
 }
 
 /** Session receipts and the daily page use the same wording. `label` is the card caption, not this line. */
@@ -195,23 +189,17 @@ export function headlineFor(lines: StoryLine[], _label: string): string {
     const noun = reads === 1 ? "lookup" : "lookups";
     return `Nothing changed · ${reads} ${noun}`;
   }
-  if (changed === 0 && failed === 0) {
-    return reported === 1 ? "1 change reported, not verified" : `${reported} changes reported, not verified`;
-  }
   if (changed === 0 && reported === 0) return failed === 1 ? "1 action failed" : `${failed} actions failed`;
-  if (changed === 0) {
-    const head = reported === 1 ? "1 change reported, not verified" : `${reported} changes reported, not verified`;
-    const look = failed === 1 ? "1 needs a look" : `${failed} need a look`;
-    return `${head}, ${look}`;
-  }
-  const things = changed === 1 ? "1 thing changed" : `${changed} things changed`;
-  const lookCount = failed + reported;
-  if (lookCount === 0) return things;
-  const look = lookCount === 1 ? "1 needs a look" : `${lookCount} need a look`;
-  return `${things}, ${look}`;
+  const total = changed + reported;
+  const look = failed + reported;
+  const changes = total === 1 ? "1 change" : `${total} changes`;
+  if (look === 0) return changes;
+  if (changed === 0 && failed === 0) return total === 1 ? "1 change needs a look" : `${total} changes need a look`;
+  const lookText = look === 1 ? "1 needs a look" : `${look} need a look`;
+  return `${changes}, ${lookText}`;
 }
 
-/** Nothing was changed, claimed, or failed. The chat text is the headline alone. */
+/** Nothing was changed, claimed, or failed. The chat text is the headline alone, unless detail is on or lookup sources are mixed. */
 export function isQuiet(lines: StoryLine[]): boolean {
   return lines.every((line) => line.tone === "read" || line.tone === "note" || line.tone === "unknown");
 }
@@ -221,12 +209,27 @@ export function chatText(input: {
   lines: StoryLine[];
   link: string;
   linkLabel: string;
+  detail?: boolean;
 }): { markdown: string; quiet: boolean } {
-  if (isQuiet(input.lines)) return { markdown: input.headline, quiet: true };
+  const quiet = isQuiet(input.lines);
+  const mixed = lookupSourcesMixed(input.lines);
+  if (quiet && input.detail !== true && !mixed) return { markdown: input.headline, quiet: true };
   return {
-    markdown: renderStory(input),
-    quiet: false,
+    markdown: renderStory({
+      ...input,
+      ...(input.detail === true ? { maxLines: Number.POSITIVE_INFINITY } : {}),
+    }),
+    quiet,
   };
+}
+
+/** Lookup rows name their source only when the day mixes more than one. */
+export function lookupSourcesMixed(lines: StoryLine[]): boolean {
+  const sources = new Set<LineSource>();
+  for (const line of lines) {
+    if (line.tone === "read") sources.add(line.source);
+  }
+  return sources.size > 1;
 }
 
 export function countStory(lines: StoryLine[]): { added: number; removed: number; modified: number; reads: number; failed: number } {
@@ -279,20 +282,26 @@ export function markerFor(tone: StoryTone): string {
 }
 
 export function cardRows(lines: StoryLine[]): { color: string; text: string; source: LineSource }[] {
-  return lines.filter((line) => line.tone !== "note").slice(0, 8).map((line) => ({
+  const visible = lines.filter((line) => line.tone !== "note");
+  const showReadTrust = lookupSourcesMixed(visible);
+  return visible.map((line) => ({
     color: lineColor(line),
-    text: cardLineText(line),
+    text: cardLineText(line, showReadTrust),
     source: line.source,
   }));
 }
 
-export function cardLineText(line: StoryLine): string {
+export function cardLineText(line: StoryLine, showReadTrust = false): string {
   const service = serviceLabel(line.service);
   const summary = line.summary.replace(/\.$/, "");
   const named = summary.toLowerCase().includes(service.toLowerCase()) ? summary : `${service}: ${summary}`;
-  if (line.tone === "read") return named;
+  if (line.tone === "failed") return redactText(named);
+  if (line.tone === "read") {
+    const trust = showReadTrust && line.trust ? ` · ${line.trust}` : "";
+    return redactText(`${named}${trust}`);
+  }
   const trust = line.trust ?? trustLabel(line.source, line.service);
-  return `${named} · ${trust}`;
+  return redactText(`${named} · ${trust}`);
 }
 
 export function lineColor(line: StoryLine): string {
@@ -601,11 +610,15 @@ export function serviceLabel(name: string): string {
   return displayName(name);
 }
 
-function formatLine(line: StoryLine, showClient: boolean): string {
+function formatLine(line: StoryLine, showClient: boolean, showReadTrust: boolean): string {
   const mark = lineMarker(line);
   const prefix = mark ? `${mark} ` : "";
   const link = line.link ? ` · [Open](${line.link})` : "";
-  const trust = line.tone === "read" ? "" : line.trust ? ` · ${line.trust}` : "";
+  const trust = line.tone === "failed"
+    ? ""
+    : line.tone === "read"
+      ? (showReadTrust && line.trust ? ` · ${line.trust}` : "")
+      : (line.trust ? ` · ${line.trust}` : "");
   const hint = line.hint ? ` · ${line.hint}` : "";
   const by = showClient && line.client ? ` · ${line.client}` : "";
   return `${prefix}${line.summary}${link}${trust}${hint}${by}`;
@@ -715,7 +728,7 @@ function colorFor(tone: StoryTone): string {
     case "created":
       return "#0f5c32";
     case "changed":
-      return "#6b4300";
+      return "#F5A524";
     case "removed":
       return "#8d1c1c";
     case "failed":

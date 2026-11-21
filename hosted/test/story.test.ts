@@ -156,7 +156,7 @@ describe("roundup", () => {
     expect(first.markdown).toContain("**Google Calendar**");
     expect(first.markdown).not.toContain("evt_1");
     expect(first.markdown).not.toContain("google_calendar__");
-    expect(first.markdown.startsWith("1 thing changed")).toBe(true);
+    expect(first.markdown.startsWith("1 change\n")).toBe(true);
     expect(first.imageUrl).toContain("/roundup/card.png?t=");
     expect(first.png[0]).toBe(137);
     const id = first.lines.find((line) => line.undo)?.id;

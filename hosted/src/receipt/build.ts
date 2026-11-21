@@ -111,6 +111,7 @@ export function buildActionReceipt(input: {
       "Verified in a service means Life Diff checked that service's own history.",
       "Sent to a service means Life Diff forwarded the call. That is not proof the service changed.",
       "Agent says it did this means the agent reported the change and Life Diff could not check it.",
+      "GitHub not checked this session.",
       "Life Diff did not run a GitHub snapshot for this session, so there is no verified GitHub diff.",
       `Times are shown in ${input.timeZone}.`,
     ],

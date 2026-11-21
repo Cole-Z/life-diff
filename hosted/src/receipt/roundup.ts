@@ -1,4 +1,5 @@
 import type { CoreDeps } from "../app/service";
+import { redactStrings, redactText } from "../proxy/redact";
 import { corroborateActions } from "./corroborate";
 import { bytesToBase64, renderCardPng } from "./card";
 import { renderDiffPage } from "./page";
@@ -75,16 +76,17 @@ export async function buildRoundup(deps: CoreDeps & { issuer: string }, input: {
     lines,
     link: page,
     linkLabel: "Full day",
+    detail: input.detail === true,
   });
-  const markdown = chat.markdown;
-  const html = renderDiffPage({
+  const markdown = redactText(chat.markdown);
+  const html = redactText(renderDiffPage({
     title: `Life Diff ${day}`,
     lede: "What your agents changed.",
     headline,
     when: `${day} · ${settings.timeZone} · day ends ${settings.dayEnd}`,
     lines,
     footer: "Life Diff records tool calls routed through it. GitHub is the sign-in, plus an optional check when you turn it on and name the repositories.",
-  });
+  }));
   const png = await renderCardPng(lines, "Life Diff", label);
   const finalizedAt = input.finalize ? (existing?.finalizedAt ?? deps.now.toISOString()) : existing?.finalizedAt;
   if (input.save && token && !skipStore) {
@@ -148,10 +150,10 @@ export async function loadRoundup(deps: CoreDeps & { issuer: string }, day?: str
     since: stored.since,
     until: stored.until,
     at: stored.at,
-    markdown: stored.markdown,
-    lines: stored.lines,
+    markdown: redactText(stored.markdown),
+    lines: redactStrings(stored.lines),
     png: png ?? new Uint8Array(),
-    html: stored.html,
+    html: redactText(stored.html),
     finalized: true,
     imageUrl: `${deps.issuer.replace(/\/$/, "")}/roundup/card.png?t=${stored.cardToken}`,
     cardToken: stored.cardToken,
@@ -169,7 +171,36 @@ export async function receiptPresentation(deps: CoreDeps, receipt: Receipt, link
     linkLabel: "Full receipt",
   });
   const png = await renderCardPng(lines, "Life Diff", "This session");
-  return { markdown: chat.markdown, png, lines, quiet: chat.quiet, ...(imageUrl ? { imageUrl } : {}) };
+  return { markdown: redactText(chat.markdown), png, lines, quiet: chat.quiet, ...(imageUrl ? { imageUrl } : {}) };
+}
+
+/** Lookup-only end_session stays one line and does not hand back a card. get_receipt still can. */
+export function sessionToolPayload(input: {
+  summary: string;
+  receipt: Receipt;
+  markdown: string;
+  url: string;
+  imageUrl?: string;
+  quiet: boolean;
+  html?: string;
+  includeHtml?: boolean;
+}): Record<string, unknown> {
+  const receipt = input.quiet ? omitCardToken(input.receipt) : input.receipt;
+  return {
+    summary: input.summary,
+    receipt,
+    markdown: input.markdown,
+    url: input.url,
+    htmlUrl: input.url,
+    ...(!input.quiet && input.imageUrl ? { imageUrl: input.imageUrl } : {}),
+    ...(input.includeHtml && input.html ? { html: input.html } : {}),
+  };
+}
+
+function omitCardToken(receipt: Receipt): Receipt {
+  const copy = { ...receipt };
+  delete copy.cardToken;
+  return copy;
 }
 
 export function pngContent(png: Uint8Array): { type: "image"; data: string; mimeType: "image/png" } | null {
@@ -186,7 +217,7 @@ async function collectLines(deps: CoreDeps, settings: UserSettings, window: { st
     if (!json) continue;
     let receipt: Receipt;
     try {
-      receipt = JSON.parse(json) as Receipt;
+      receipt = redactStrings(JSON.parse(json) as Receipt);
     } catch {
       continue;
     }

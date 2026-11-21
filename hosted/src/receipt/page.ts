@@ -1,5 +1,5 @@
 import { escapeHtml } from "../text";
-import { displayTone, lineMarker, serviceLabel, trustLabel, type StoryLine } from "./story";
+import { displayTone, lineMarker, lookupSourcesMixed, serviceLabel, trustLabel, type StoryLine } from "./story";
 
 const ICON_ADDED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7 1h2v14H7zM1 7h14v2H1z"/></svg>`;
 const ICON_REMOVED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 7h14v2H1z"/></svg>`;
@@ -16,10 +16,11 @@ export function renderDiffPage(input: {
   footer: string;
 }): string {
   const clients = new Set(input.lines.map((line) => line.client).filter((client): client is string => Boolean(client)));
+  const showReadTrust = lookupSourcesMixed(input.lines);
   const groups = group(input.lines);
   const body = groups.length === 0
     ? `<p class="empty">No changes.</p>`
-    : groups.map((item) => renderGroup(item, clients.size > 1)).join("");
+    : groups.map((item) => renderGroup(item, clients.size > 1, showReadTrust)).join("");
   const notes = (input.notes ?? []).map((note) => `<p class="note">${escapeHtml(note)}</p>`).join("");
   return `<!DOCTYPE html>
 <html lang="en">
@@ -156,7 +157,7 @@ function group(lines: StoryLine[]): { service: string; lines: StoryLine[] }[] {
   return [...groups.values()];
 }
 
-function renderGroup(groupLines: { service: string; lines: StoryLine[] }, showClient: boolean): string {
+function renderGroup(groupLines: { service: string; lines: StoryLine[] }, showClient: boolean, showReadTrust: boolean): string {
   const letter = (groupLines.service.trim().charAt(0) || "S").toUpperCase();
   const repos = new Map<string, StoryLine[]>();
   for (const line of groupLines.lines) {
@@ -167,7 +168,7 @@ function renderGroup(groupLines: { service: string; lines: StoryLine[] }, showCl
   }
   const blocks = [...repos.entries()].map(([repo, lines]) => {
     const heading = repo ? `<h3 class="repo">${escapeHtml(repoTitle(repo, lines, showClient))}</h3>` : "";
-    return `${heading}${lines.map((line) => renderLine(line, showClient)).join("")}`;
+    return `${heading}${lines.map((line) => renderLine(line, showClient, showReadTrust)).join("")}`;
   }).join("");
   return `<section>
     <div class="svc"><span class="icon" aria-hidden="true">${escapeHtml(letter)}</span><h2>${escapeHtml(serviceLabel(groupLines.service))}</h2></div>
@@ -188,15 +189,16 @@ function repoTitle(repo: string, lines: StoryLine[], showClient: boolean): strin
   return repo;
 }
 
-function renderLine(line: StoryLine, showClient: boolean): string {
+function renderLine(line: StoryLine, showClient: boolean, showReadTrust: boolean): string {
   const who = showClient && line.client && !line.repo ? ` · ${line.client}` : "";
+  const readTrust = showReadTrust && line.trust ? ` · ${line.trust}` : "";
   if (line.tone === "note") {
     const text = line.summary.endsWith(".") ? line.summary : `${line.summary}.`;
     return `<p class="note">${escapeHtml(text)}</p>`;
   }
   if (line.tone === "read" && line.details && line.details.length > 0 && line.readCount) {
     const items = line.details.map((detail) => `<li>${escapeHtml(detail.text)}</li>`).join("");
-    return `<details class="reads"><summary>${escapeHtml(lineMarker(line))} ${escapeHtml(line.summary)}${escapeHtml(who)}</summary><ul>${items}</ul></details>`;
+    return `<details class="reads"><summary>${escapeHtml(lineMarker(line))} ${escapeHtml(line.summary)}${escapeHtml(readTrust)}${escapeHtml(who)}</summary><ul>${items}</ul></details>`;
   }
   const pairs = (line.details ?? []).filter((detail) => detail.before || detail.after);
   const extras = (line.details ?? []).filter((detail) => !detail.before && !detail.after);
@@ -210,7 +212,9 @@ function renderLine(line: StoryLine, showClient: boolean): string {
     : "";
   const link = line.link?.startsWith("https://") ? `<p><a href="${escapeHtml(line.link)}">Open</a></p>` : "";
   const undo = line.hint ? `<p class="undo">${escapeHtml(line.hint)}</p>` : "";
-  const badge = line.tone === "read" ? "" : (line.trust ?? trustLabel(line.source, line.service));
+  const badge = line.tone === "failed" || line.tone === "read"
+    ? (line.tone === "read" ? readTrust.replace(/^ · /, "") : "")
+    : (line.trust ?? trustLabel(line.source, line.service));
   const trust = badge || who ? `<div class="meta"><span class="tag">${escapeHtml(`${badge}${who}`)}</span></div>` : "";
   return `<article class="row is-${displayTone(line)}">
     ${trust}

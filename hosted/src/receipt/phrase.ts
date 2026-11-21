@@ -1,4 +1,5 @@
 import type { Classification } from "../proxy/classify";
+import { redactText } from "../proxy/redact";
 import { displayName } from "./names";
 
 export interface PhraseInput {
@@ -19,7 +20,7 @@ export function phraseAction(input: PhraseInput): string {
   const built = sentence(service, tool, input.classification, input.args, subject);
   if (!input.ok) {
     const reason = publicReason(input.error, tool);
-    return reason ? `Failed in ${service}. ${reason}` : `Failed in ${service}.`;
+    return reason ? `Failed in ${service}. ${reason}` : `Failed in ${service}`;
   }
   return built.ok;
 }
@@ -184,11 +185,13 @@ function publicNumber(value: unknown): string | undefined {
 
 function publicReason(error: string | undefined, tool: string): string | undefined {
   if (!error) return undefined;
-  const cleaned = error.replaceAll(tool, "").replace(/\s+/g, " ").trim();
-  if (!cleaned || cleaned.length > 140) return undefined;
-  if (/bearer|token|secret|password|cookie|authorization|\[redacted\]|https?:\/\//i.test(cleaned)) return undefined;
-  if (/[{}[\]<>]/.test(cleaned)) return undefined;
-  return cleaned.endsWith(".") ? cleaned : `${cleaned}.`;
+  let cleaned = redactText(error).replaceAll(tool, " ").replace(/\s+/g, " ").trim();
+  cleaned = cleaned.replace(/^(error|exception|failed|failure)\b[:\s-]*/i, "").trim();
+  if (!cleaned || /[{}[\]<>]/.test(cleaned)) return undefined;
+  if (/^https?:\/\//i.test(cleaned)) return undefined;
+  if (cleaned.length > 80) cleaned = `${cleaned.slice(0, 79).trimEnd()}…`;
+  const sentence = cleaned.replace(/\.$/, "");
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }
 
 function findHttps(value: unknown): string | undefined {

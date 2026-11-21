@@ -71,13 +71,13 @@ Pass `repos` to `start_session` only for repositories you want checked. Leave it
 5. This is the receipt the agent shows. The card image comes with the tool result. The markdown does not include the card token.
 
 ```markdown
-3 things changed, 2 need a look
+4 changes, 2 need a look
 
 **Google Calendar**
 🟡 Moved "Design Sync" · Tue 2:00 PM → Thu 3:00 PM · [Open](https://calendar.google.com/calendar/event?eid=demo) · Agent says it did this, not verified · Undo not available yet
 
 **Notion**
-⚠️ Failed in Notion. The page was not saved. · Sent to Notion, not verified · Cursor
+⚠️ Failed in Notion. The page was not saved · Cursor
 
 **Gmail**
 🔴 Sent 'Notes for Friday' from Gmail. · [Open](https://mail.google.com/mail/u/0/#drafts/demo) · Sent to Gmail, not verified · Undo not available yet · Grok Bot
@@ -98,13 +98,15 @@ cole-z/cardpost
 Full receipt: https://lifediff.dev/receipts/rcpt_demo
 ```
 
-A day or a session with only lookups is one line, `Nothing changed · 2 lookups`, with no card attached. The receipt is still saved, and its card is at the receipt URL. With nothing at all, both say `Nothing changed`. A read stored beside a matching call Life Diff already forwarded is counted once.
+A day or a session with only lookups is one line, `Nothing changed · 2 lookups`, when those lookups come from one source. `end_session` then returns no card image, and the structured result omits `imageUrl` and `cardToken`. The receipt is still saved. `get_receipt` still returns that card. When a day mixes a call Life Diff forwarded with one the agent reported, each lookup row names that source (`7 lookups · Sent to DeepWiki, not verified`). With nothing at all, both say `Nothing changed`. A read stored beside a matching call Life Diff already forwarded is counted once. A session that never snapshotted GitHub keeps "GitHub not checked this session." in the receipt notes, not in the chat line or the card.
+
+The first line counts changes the same way for a session and a day. Checked and forwarded changes are `3 changes`. A change only the agent reported is `1 change needs a look`. A mix is `3 changes, 1 needs a look`. Failures alone are `1 action failed`. A failed call is `Failed in Notion` plus a short reason, with no "Sent to" badge.
 
 Life Diff only sees calls routed through it. It does not block, rewrite, or retry a call. A missing list item is not a deletion. Tokens are encrypted and are never returned or written to a log.
 
 ## What Life Diff stores
 
-A receipt stores the service, what happened, and whether Life Diff checked it. For a call Life Diff forwarded, it also stores the tool name, the arguments, and a short result. Before those are saved, values whose keys contain `token`, `password`, `secret`, `authorization`, `api_key`, `cookie`, `credential`, or `key` are replaced with `[redacted]`, including nested keys. Result text is cut to a short snippet. File contents, message bodies, and sign-in tokens are not on the receipt. You can delete this history on the settings page or by asking the agent to call `clear_my_history`.
+A receipt stores the service, what happened, and whether Life Diff checked it. For a call Life Diff forwarded, it also stores the tool name, the arguments, and a short result. Before those are saved, two passes run. Values whose keys contain `token`, `password`, `secret`, `authorization`, `api_key`, `cookie`, `credential`, or `key` are replaced with `[redacted]`, including nested keys. Every stored string is also scanned for secret values: `api_key=...` and `password: ...` style pairs, `Bearer` tokens, and well-known token shapes (`ghp_`, `gho_`, `ghs_`, `github_pat_`, `sk_live_`, `sk_test_`, `rk_`, Slack `xoxb-` style tokens, `AKIA` keys, `AIza` keys, JWTs, and `BEGIN ... PRIVATE KEY` blocks). The same scan runs on claim text, summaries, and on the markdown, HTML, card, and JSON that are returned. Result text is cut to a short snippet. The call sent upstream is not redacted. File contents, message bodies, and sign-in tokens are not on the receipt. You can delete this history on the settings page or by asking the agent to call `clear_my_history`.
 
 ### On this computer
 

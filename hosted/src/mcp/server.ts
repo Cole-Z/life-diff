@@ -12,7 +12,8 @@ import { D1MetadataStore } from "../storage/d1";
 import type { ClaimInput } from "../receipt/types";
 import type { GitHubApi } from "../github/types";
 import { getMcpAuthContext } from "agents/mcp/server";
-import { buildRoundup, pngContent, receiptPresentation } from "../receipt/roundup";
+import { redactText } from "../proxy/redact";
+import { buildRoundup, pngContent, receiptPresentation, sessionToolPayload } from "../receipt/roundup";
 
 const claimSchema = z.object({
   id: z.string().optional(),
@@ -84,7 +85,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "end_session",
     {
-      description: "Close the open session and return the receipt. Omit sessionId to close the current session. Show the markdown only when something changed. When nothing changed, the result is one short line and no card; rely on get_daily_diff instead. Optional claims may include before, after, and url.",
+      description: "Close the open session and return the receipt. Omit sessionId to close the current session. Show the markdown only when something changed. When nothing changed, the result is one short line and no card, and imageUrl and cardToken are omitted. get_receipt still returns the card. Rely on get_daily_diff instead of an empty receipt. Optional claims may include before, after, and url.",
       inputSchema: z.object({
         sessionId: z.string().optional(),
         timeZone: z.string().optional(),
@@ -105,15 +106,15 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
       });
       const link = receiptUrl(env, result.receipt.id);
       const shown = await receiptPresentation(core, result.receipt, link);
-      const payload = {
+      const payload = sessionToolPayload({
         summary: result.summary,
         receipt: result.receipt,
         markdown: shown.markdown,
         url: link,
-        htmlUrl: link,
+        quiet: shown.quiet,
         ...(shown.imageUrl ? { imageUrl: shown.imageUrl } : {}),
-        ...(input.includeHtml ? { html: result.html } : {}),
-      };
+        ...(input.includeHtml ? { html: result.html, includeHtml: true } : {}),
+      });
       return shownContent(shown.markdown, shown.quiet ? new Uint8Array() : shown.png, payload);
     }),
   );
@@ -262,7 +263,7 @@ function dailyHandler(env: Env) {
       lines: roundup.lines.map((line) => ({
         service: line.service,
         source: line.source,
-        summary: line.summary,
+        summary: redactText(line.summary),
         tone: line.tone,
         ...(line.trust ? { trust: line.trust } : {}),
         ...(line.id ? { id: line.id } : {}),

@@ -5,7 +5,7 @@ const LOW_VALUE = new Set(["repo", "owner", "reponame", "repository", "url", "ur
 
 const SECRET_NAME = "access[_-]?token|private[_-]?key|client[_-]?secret|api[_-]?key|password|passwd|authorization|cookie|token|secret|pwd";
 const ASSIGN = new RegExp(
-  `\\b(?:${SECRET_NAME})\\b\\s*[:=]\\s*(?:"[^"\\n]{0,400}"|'[^'\\n]{0,400}'|(?:bearer\\s+\\S+|\\S+))`,
+  `\\b(${SECRET_NAME})\\b(\\s*[:=]\\s*)("[^"\\n]{0,400}"|'[^'\\n]{0,400}'|bearer\\s+\\S+|\\S+)`,
   "gi",
 );
 const PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
@@ -24,9 +24,8 @@ const TOKEN_SHAPES = [
 /** Hide secret values inside free text. Key names alone are not enough. */
 export function redactText(value: string): string {
   let text = value.replace(PRIVATE_KEY, "[redacted]");
-  text = text.replace(ASSIGN, (match) => {
-    const key = /^[A-Za-z0-9_-]+/.exec(match)?.[0] ?? "secret";
-    return `${key}=[redacted]`;
+  text = text.replace(ASSIGN, (_match, key: string, separator: string, value: string) => {
+    return `${key}${separator}${redactAssigned(value)}`;
   });
   text = text.replace(BEARER, "Bearer [redacted]");
   for (const pattern of TOKEN_SHAPES) text = text.replace(pattern, "[redacted]");
@@ -112,6 +111,23 @@ export function pickSubject(value: unknown): string | undefined {
     if (typeof item === "string" && item.trim() && item !== "[redacted]") return clip(item);
   }
   return undefined;
+}
+
+/** Keep the key, the : or = separator, and a Bearer scheme. Replace only the secret. */
+function redactAssigned(value: string): string {
+  const quoted = /^(['"])([\s\S]*)\1$/.exec(value);
+  if (quoted) {
+    const quote = quoted[1] ?? "";
+    const inner = quoted[2] ?? "";
+    return `${quote}${redactAssignedBody(inner)}${quote}`;
+  }
+  return redactAssignedBody(value);
+}
+
+function redactAssignedBody(value: string): string {
+  const bearer = /^(bearer\s+)\S+/i.exec(value);
+  if (bearer?.[1]) return `${bearer[1]}[redacted]`;
+  return "[redacted]";
 }
 
 function subjectAt(record: Record<string, unknown>, wanted: string): string | undefined {

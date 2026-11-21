@@ -40,11 +40,15 @@ describe("headlines", () => {
     expect(headlineFor([read, read], "Today")).toBe("Nothing changed · 2 lookups");
     expect(headlineFor([read, read], "This session")).toBe("Nothing changed · 2 lookups");
     expect(headlineFor([read], "This session")).toBe("Nothing changed · 1 lookup");
-    expect(headlineFor([write, failed], "This session")).toBe("1 change, 1 needs a look");
-    expect(headlineFor([failed], "Today")).toBe("1 action failed");
-    expect(headlineFor([failed, failed], "Today")).toBe("2 actions failed");
+    expect(headlineFor([write, failed], "This session")).toBe("1 change · 1 failed");
+    expect(headlineFor([failed], "Today")).toBe("1 failed call");
+    expect(headlineFor([failed, failed], "Today")).toBe("2 failed calls");
     expect(headlineFor([write, write], "Today")).toBe("2 changes");
-    expect(headlineFor([write, failed], "Today")).toBe("1 change, 1 needs a look");
+    expect(headlineFor([write, failed], "Today")).toBe("1 change · 1 failed");
+    const claim = { ...write, source: "claim" as const, summary: "Moved the call" };
+    expect(headlineFor([claim, failed], "This session")).toBe("1 change needs a look · 1 failed");
+    expect(headlineFor([claim, failed], "Today")).toBe("1 change needs a look · 1 failed");
+    expect(headlineFor([write, write, claim, failed, failed], "Today")).toBe("3 changes, 1 needs a look · 2 failed");
   });
 });
 
@@ -98,9 +102,10 @@ describe("badges and grouping", () => {
         repo: "acme/app",
       }],
     );
+    const lines = condenseLines(storyFromReceipt(receipt), { detail: false });
     const markdown = renderStory({
-      headline: "1 action failed",
-      lines: condenseLines(storyFromReceipt(receipt), { detail: false }),
+      headline: headlineFor(lines, "This session"),
+      lines,
       link: "https://lifediff.dev/receipts/rcpt_test",
       linkLabel: "Full receipt",
     });

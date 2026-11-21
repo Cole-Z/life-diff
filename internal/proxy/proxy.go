@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -224,7 +225,7 @@ func (b *bridge) entry(call pendingCall, rpcErr *struct {
 			}
 			for _, block := range parsed.Content {
 				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-					text = clip(block.Text, 400)
+					text = clip(redactText(block.Text), 400)
 					break
 				}
 			}
@@ -237,7 +238,7 @@ func (b *bridge) entry(call pendingCall, rpcErr *struct {
 	if !ok {
 		status = "error"
 		if rpcErr != nil {
-			errText = clip(rpcErr.Message, 500)
+			errText = clip(redactText(rpcErr.Message), 500)
 		} else if text != "" {
 			errText = text
 		} else {
@@ -489,6 +490,58 @@ func stringField(record map[string]any, wanted string) (string, bool) {
 	return "", false
 }
 
+var (
+	privateKeyRE = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+	assignRE     = regexp.MustCompile(`(?i)\b(access[_-]?token|private[_-]?key|client[_-]?secret|api[_-]?key|password|passwd|authorization|cookie|token|secret|pwd)\b(\s*[:=]\s*)("[^"\n]{0,400}"|'[^'\n]{0,400}'|bearer\s+\S+|\S+)`)
+	assignParse  = regexp.MustCompile(`(?i)\b(access[_-]?token|private[_-]?key|client[_-]?secret|api[_-]?key|password|passwd|authorization|cookie|token|secret|pwd)\b(\s*[:=]\s*)("[^"\n]{0,400}"|'[^'\n]{0,400}'|bearer\s+\S+|\S+)`)
+	bearerValue  = regexp.MustCompile(`(?i)^(bearer\s+)\S+`)
+	bearerRE     = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}`)
+	tokenShapes  = []*regexp.Regexp{
+		regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{16,}\b`),
+		regexp.MustCompile(`\bgh[pos]_[A-Za-z0-9_]{16,}\b`),
+		regexp.MustCompile(`\bsk_(?:live|test)_[A-Za-z0-9]{10,}\b`),
+		regexp.MustCompile(`\brk_[A-Za-z0-9_]{16,}\b`),
+		regexp.MustCompile(`\bxox[abprs]-[A-Za-z0-9-]{10,}\b`),
+		regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
+		regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{20,}\b`),
+		regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b`),
+	}
+)
+
+// redactText hides secret values written inside ordinary text. It keeps the key, the separator, and a Bearer scheme.
+func redactText(value string) string {
+	value = privateKeyRE.ReplaceAllString(value, "[redacted]")
+	value = assignRE.ReplaceAllStringFunc(value, func(match string) string {
+		parts := assignParse.FindStringSubmatch(match)
+		if len(parts) < 4 {
+			return "[redacted]"
+		}
+		return parts[1] + parts[2] + redactAssigned(parts[3])
+	})
+	value = bearerRE.ReplaceAllString(value, "Bearer [redacted]")
+	for _, pattern := range tokenShapes {
+		value = pattern.ReplaceAllString(value, "[redacted]")
+	}
+	return value
+}
+
+func redactAssigned(value string) string {
+	if len(value) >= 2 {
+		quote := value[0]
+		if (quote == '"' || quote == '\'') && value[len(value)-1] == quote {
+			return string(quote) + redactAssignedBody(value[1:len(value)-1]) + string(quote)
+		}
+	}
+	return redactAssignedBody(value)
+}
+
+func redactAssignedBody(value string) string {
+	if parts := bearerValue.FindStringSubmatch(value); len(parts) == 2 {
+		return parts[1] + "[redacted]"
+	}
+	return "[redacted]"
+}
+
 func redactRaw(raw json.RawMessage) any {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -530,10 +583,11 @@ func redactValue(value any, depth int) any {
 		}
 		return out
 	case string:
-		if len(typed) > 2000 {
-			return fmt.Sprintf("[%d characters]", len(typed))
+		cleaned := redactText(typed)
+		if len(cleaned) > 2000 {
+			return fmt.Sprintf("[%d characters]", len(cleaned))
 		}
-		return typed
+		return cleaned
 	default:
 		return value
 	}

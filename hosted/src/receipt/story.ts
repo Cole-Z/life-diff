@@ -115,7 +115,7 @@ export function condenseLines(lines: StoryLine[], input: { detail: boolean }): S
       ...(clients.size === 1 ? { client: [...clients][0] } : {}),
     });
   }
-  return assignIds(orderLines(folded));
+  return assignIds(orderLines(folded)).map(stampTrust);
 }
 
 export function renderStory(input: {
@@ -129,8 +129,9 @@ export function renderStory(input: {
   const max = input.maxLines ?? MAX_CHAT_LINES;
   const notes = input.lines.filter((line) => line.tone === "note");
   const bodyAll = input.lines.filter((line) => line.tone !== "note");
-  const body = Number.isFinite(max) ? bodyAll.slice(0, max) : bodyAll;
-  const hidden = bodyAll.length - body.length;
+  const visible = Number.isFinite(max) ? bodyAll.slice(0, max) : bodyAll;
+  const body = coalesceRepos(visible);
+  const hidden = bodyAll.length - visible.length;
   const showReadTrust = lookupSourcesMixed(bodyAll);
   const clients = new Set(body.map((line) => line.client).filter((client): client is string => Boolean(client)));
   const showClient = clients.size > 1;
@@ -189,14 +190,19 @@ export function headlineFor(lines: StoryLine[], _label: string): string {
     const noun = reads === 1 ? "lookup" : "lookups";
     return `Nothing changed · ${reads} ${noun}`;
   }
-  if (changed === 0 && reported === 0) return failed === 1 ? "1 action failed" : `${failed} actions failed`;
+  if (changed === 0 && reported === 0) return failed === 1 ? "1 failed call" : `${failed} failed calls`;
   const total = changed + reported;
-  const look = failed + reported;
-  const changes = total === 1 ? "1 change" : `${total} changes`;
-  if (look === 0) return changes;
-  if (changed === 0 && failed === 0) return total === 1 ? "1 change needs a look" : `${total} changes need a look`;
-  const lookText = look === 1 ? "1 needs a look" : `${look} need a look`;
-  return `${changes}, ${lookText}`;
+  let headline: string;
+  if (reported === 0) headline = total === 1 ? "1 change" : `${total} changes`;
+  else if (changed === 0) headline = total === 1 ? "1 change needs a look" : `${total} changes need a look`;
+  else {
+    const changes = total === 1 ? "1 change" : `${total} changes`;
+    const lookText = reported === 1 ? "1 needs a look" : `${reported} need a look`;
+    headline = `${changes}, ${lookText}`;
+  }
+  if (failed === 0) return headline;
+  const failedText = failed === 1 ? "1 failed" : `${failed} failed`;
+  return `${headline} · ${failedText}`;
 }
 
 /** Nothing was changed, claimed, or failed. The chat text is the headline alone, unless detail is on or lookup sources are mixed. */
@@ -344,7 +350,7 @@ function actionLine(action: RecordedAction): StoryLine {
     time: action.time,
     callKey: `${action.upstream}\0${action.tool}\0${stable(action.arguments)}`,
     ok: action.ok,
-    trust: trustLabel(source, service),
+    trust: presented.tone === "failed" ? failedTrust(service) : trustLabel(source, service),
     ...(action.verb ? { verb: action.verb } : {}),
     ...(action.tool ? { tool: action.tool } : {}),
     ...(presented.repo ? { repo: presented.repo } : {}),
@@ -624,6 +630,45 @@ function formatLine(line: StoryLine, showClient: boolean, showReadTrust: boolean
   return `${prefix}${line.summary}${link}${trust}${hint}${by}`;
 }
 
+/** Keep one heading per repository inside a service, in the order that repository first appeared. */
+function coalesceRepos(lines: StoryLine[]): StoryLine[] {
+  const out: StoryLine[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const service = lines[index]?.service ?? "";
+    let end = index + 1;
+    while (end < lines.length && lines[end]?.service === service) end += 1;
+    const order: string[] = [];
+    const groups = new Map<string, StoryLine[]>();
+    for (const line of lines.slice(index, end)) {
+      const key = line.repo ?? "";
+      const list = groups.get(key);
+      if (list) list.push(line);
+      else {
+        order.push(key);
+        groups.set(key, [line]);
+      }
+    }
+    for (const key of order) {
+      const grouped = groups.get(key);
+      if (grouped) out.push(...grouped);
+    }
+    index = end;
+  }
+  return out;
+}
+
+function stampTrust(line: StoryLine): StoryLine {
+  if (line.tone !== "failed") return line;
+  const trust = failedTrust(line.service);
+  if (line.trust === trust) return line;
+  return { ...line, trust };
+}
+
+function failedTrust(service: string): string {
+  return `Failed in ${displayName(service)}`;
+}
+
 function repoHeading(repo: string, lines: StoryLine[], showClient: boolean): string {
   const clients = new Set(lines.map((line) => line.client).filter((client): client is string => Boolean(client)));
   const client = clients.size === 1 ? [...clients][0] : undefined;
@@ -660,7 +705,7 @@ function mismatchLines(actions: RecordedAction[], changes: Change[]): StoryLine[
       summary: `Agent said it closed #${number}, but GitHub shows it still open.`,
       seed: `mismatch:${action.id}`,
       time: action.time,
-      trust: trustLabel(source, "GitHub"),
+      trust: failedTrust("GitHub"),
       ...(repo ? { repo } : {}),
     });
   }

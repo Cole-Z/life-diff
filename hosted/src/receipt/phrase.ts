@@ -186,7 +186,7 @@ function publicNumber(value: unknown): string | undefined {
 function publicReason(error: string | undefined, tool: string): string | undefined {
   if (!error) return undefined;
   let cleaned = redactText(error).replaceAll(tool, " ").replace(/\s+/g, " ").trim();
-  cleaned = cleaned.replace(/^(error|exception|failed|failure)\b[:\s-]*/i, "").trim();
+  cleaned = cleaned.replace(/^error\s*[:\-]\s*/i, "").trim();
   if (!cleaned || /[{}[\]<>]/.test(cleaned)) return undefined;
   if (/^https?:\/\//i.test(cleaned)) return undefined;
   if (cleaned.length > 80) cleaned = `${cleaned.slice(0, 79).trimEnd()}…`;

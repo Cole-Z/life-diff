@@ -3,6 +3,49 @@ export const RESULT_SNIPPET_LIMIT = 240;
 const PREFERRED_SUBJECTS = ["question", "title", "subject", "name", "query", "q", "text", "message", "prompt", "summary"];
 const LOW_VALUE = new Set(["repo", "owner", "reponame", "repository", "url", "uri", "id", "path", "type", "format", "model", "tool"]);
 
+const SECRET_NAME = "access[_-]?token|private[_-]?key|client[_-]?secret|api[_-]?key|password|passwd|authorization|cookie|token|secret|pwd";
+const ASSIGN = new RegExp(
+  `\\b(?:${SECRET_NAME})\\b\\s*[:=]\\s*(?:"[^"\\n]{0,400}"|'[^'\\n]{0,400}'|(?:bearer\\s+\\S+|\\S+))`,
+  "gi",
+);
+const PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
+const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+const TOKEN_SHAPES = [
+  /\bgithub_pat_[A-Za-z0-9_]{16,}\b/g,
+  /\bgh[pos]_[A-Za-z0-9_]{16,}\b/g,
+  /\bsk_(?:live|test)_[A-Za-z0-9]{10,}\b/g,
+  /\brk_[A-Za-z0-9_]{16,}\b/g,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bAIza[0-9A-Za-z_-]{20,}\b/g,
+  /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+];
+
+/** Hide secret values inside free text. Key names alone are not enough. */
+export function redactText(value: string): string {
+  let text = value.replace(PRIVATE_KEY, "[redacted]");
+  text = text.replace(ASSIGN, (match) => {
+    const key = /^[A-Za-z0-9_-]+/.exec(match)?.[0] ?? "secret";
+    return `${key}=[redacted]`;
+  });
+  text = text.replace(BEARER, "Bearer [redacted]");
+  for (const pattern of TOKEN_SHAPES) text = text.replace(pattern, "[redacted]");
+  return text;
+}
+
+/** Walk stored JSON and redact every string. Field names such as cardToken stay. */
+export function redactStrings<T>(value: T, depth = 0): T {
+  if (depth > 8) return value;
+  if (typeof value === "string") return redactText(value) as T;
+  if (Array.isArray(value)) return value.map((item) => redactStrings(item, depth + 1)) as T;
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) out[key] = redactStrings(item, depth + 1);
+    return out as T;
+  }
+  return value;
+}
+
 export function redactValue(value: unknown, depth = 0): unknown {
   if (depth > 6) return "[truncated]";
   if (Array.isArray(value)) return value.slice(0, 40).map((item) => redactValue(item, depth + 1));
@@ -13,7 +56,11 @@ export function redactValue(value: unknown, depth = 0): unknown {
     }
     return out;
   }
-  if (typeof value === "string" && value.length > 2000) return `[${value.length} characters]`;
+  if (typeof value === "string") {
+    const cleaned = redactText(value);
+    if (cleaned.length > 2000) return `[${cleaned.length} characters]`;
+    return cleaned;
+  }
   return value;
 }
 
@@ -26,30 +73,24 @@ export function scrubSecrets(message: string, secrets: string[]): string {
     const bearer = trimmed.replace(/^Bearer\s+/i, "");
     if (bearer.length >= 4 && bearer !== trimmed) out = out.split(bearer).join("[redacted]");
   }
-  return out.slice(0, 500);
+  return redactText(out).slice(0, 500);
 }
 
-/** Redact secret-like keys inside a stored result, then cap the snippet. */
+/** Redact secret-like keys and values inside a stored result, then cap the snippet. */
 export function redactSnippet(value: string, limit = RESULT_SNIPPET_LIMIT): string {
-  let text = value.trim();
-  if (text.startsWith("{") || text.startsWith("[")) {
+  const original = value.trim();
+  let text: string;
+  if (original.startsWith("{") || original.startsWith("[")) {
     try {
-      text = JSON.stringify(redactValue(JSON.parse(text)));
+      text = JSON.stringify(redactValue(JSON.parse(original)));
     } catch {
-      text = redactLoose(text);
+      text = redactText(original);
     }
   } else {
-    text = redactLoose(text);
+    text = redactText(original);
   }
   if (text.length <= limit) return text;
   return `${text.slice(0, Math.max(0, limit - 1))}…`;
-}
-
-function redactLoose(text: string): string {
-  return text.replace(
-    /"(token|secret|password|passwd|authorization|api_key|apikey|cookie|credential|access_key|refresh_token)"\s*:\s*"[^"]*"/gi,
-    '"$1":"[redacted]"',
-  );
 }
 
 export function pickSubject(value: unknown): string | undefined {

@@ -40,11 +40,11 @@ describe("headlines", () => {
     expect(headlineFor([read, read], "Today")).toBe("Nothing changed · 2 lookups");
     expect(headlineFor([read, read], "This session")).toBe("Nothing changed · 2 lookups");
     expect(headlineFor([read], "This session")).toBe("Nothing changed · 1 lookup");
-    expect(headlineFor([write, failed], "This session")).toBe("1 thing changed, 1 needs a look");
+    expect(headlineFor([write, failed], "This session")).toBe("1 change, 1 needs a look");
     expect(headlineFor([failed], "Today")).toBe("1 action failed");
     expect(headlineFor([failed, failed], "Today")).toBe("2 actions failed");
-    expect(headlineFor([write, write], "Today")).toBe("2 things changed");
-    expect(headlineFor([write, failed], "Today")).toBe("1 thing changed, 1 needs a look");
+    expect(headlineFor([write, write], "Today")).toBe("2 changes");
+    expect(headlineFor([write, failed], "Today")).toBe("1 change, 1 needs a look");
   });
 });
 
@@ -69,7 +69,7 @@ describe("badges and grouping", () => {
       link: "https://lifediff.dev/roundup/2026-04-02",
       linkLabel: "Full day",
     });
-    expect(markdown.startsWith("1 thing changed")).toBe(true);
+    expect(markdown.startsWith("1 change\n")).toBe(true);
     expect(markdown).toContain("**GitHub**");
     expect(markdown).toContain("cole-z/cardpost: 1 issue by Grok Bot");
     expect(markdown).toContain("Created issue #12 'Fix login' in cole-z/cardpost");

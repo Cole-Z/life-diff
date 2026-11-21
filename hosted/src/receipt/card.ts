@@ -1,5 +1,14 @@
 import { cardRows, headlineFor, type StoryLine } from "./story";
 
+export const CARD_STORY_LIMIT = 12;
+export const CARD_WRAP_ROWS = 2;
+
+export interface CardVisualRow {
+  color: string;
+  text: string;
+  bullet: boolean;
+}
+
 const PAPER: Rgb = [243, 239, 230];
 const INK: Rgb = [28, 25, 21];
 const MAST: Rgb = [30, 58, 50];
@@ -103,15 +112,29 @@ y 00 00 11 11 0f 01 0e
 z 00 00 1f 02 04 08 1f
 `);
 
+export function planCard(lines: StoryLine[], width = 720): CardVisualRow[] {
+  const advance = (GLYPH_W + 1) * SCALE;
+  const textWidth = Math.floor((width - 56) / advance);
+  const rows = cardRows(lines);
+  const shown = rows.slice(0, CARD_STORY_LIMIT);
+  const hidden = rows.length - shown.length;
+  const body: CardVisualRow[] = [];
+  for (const row of shown) {
+    const wrapped = wrapCard(row.text, textWidth, CARD_WRAP_ROWS);
+    wrapped.forEach((text, index) => {
+      body.push({ color: row.color, text, bullet: index === 0 });
+    });
+  }
+  if (hidden > 0) body.push({ color: "#5c564c", text: `+${hidden} more`, bullet: false });
+  return body;
+}
+
 export async function renderCardPng(lines: StoryLine[], title: string, caption = "Today"): Promise<Uint8Array> {
   const width = 720;
   const advance = (GLYPH_W + 1) * SCALE;
   const maxChars = Math.floor((width - 48) / advance);
   const headline = wrapCard(headlineFor(lines, caption), maxChars);
-  const body = cardRows(lines).flatMap((row) => wrapCard(row.text, Math.floor((width - 56) / advance)).map((text) => ({
-    color: row.color,
-    text,
-  }))).slice(0, 18);
+  const body = planCard(lines, width);
   const lineH = 26;
   const mast = 72;
   const height = mast + 16 + (headline.length + Math.max(body.length, 1)) * lineH + 20;
@@ -125,7 +148,7 @@ export async function renderCardPng(lines: StoryLine[], title: string, caption =
   });
   body.forEach((row, index) => {
     const y = mast + 12 + headline.length * lineH + index * lineH;
-    rect(pixels, width, 20, y + 4, 12, 12, hex(row.color));
+    if (row.bullet) rect(pixels, width, 20, y + 4, 12, 12, hex(row.color));
     drawText(pixels, width, 40, y, row.text, INK);
   });
   return encodePng(width, height, pixels);
@@ -233,7 +256,7 @@ export function cardPlain(value: string): string {
   return [...value].map((ch) => (ch === "\u2026" ? "..." : ch === "\u2192" ? "->" : FOLD[ch] ?? ch)).join("");
 }
 
-export function wrapCard(text: string, maxChars: number): string[] {
+export function wrapCard(text: string, maxChars: number, maxLines?: number): string[] {
   const plain = cardPlain(text).replace(/\s+/g, " ").trim();
   if (!plain) return [""];
   const limit = Math.max(8, maxChars);
@@ -258,7 +281,15 @@ export function wrapCard(text: string, maxChars: number): string[] {
     }
   }
   if (current) lines.push(current);
-  return lines.length > 0 ? lines : [""];
+  const wrapped = lines.length > 0 ? lines : [""];
+  if (!maxLines || wrapped.length <= maxLines) return wrapped;
+  const kept = wrapped.slice(0, maxLines);
+  const ellipsis = "...";
+  const last = kept[maxLines - 1] ?? "";
+  const room = Math.max(0, limit - ellipsis.length);
+  const base = last.length <= room ? last : last.slice(0, room).trimEnd();
+  kept[maxLines - 1] = `${base}${ellipsis}`;
+  return kept;
 }
 
 function drawText(pixels: Uint8Array, width: number, x: number, y: number, text: string, color: Rgb): void {

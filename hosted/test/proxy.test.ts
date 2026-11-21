@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { encryptString } from "../src/crypto/aesgcm";
-import { endSession, ensureSession, recordProxyCall, sessionPortFromBook } from "../src/app/service";
+import { endSession, ensureSession, logAction, recordProxyCall, sessionPortFromBook } from "../src/app/service";
 import { forwardToolCall } from "../src/proxy/forward";
 import { classifyToolName, plainAction } from "../src/proxy/classify";
 import { callUpstreamTool, listUpstreamTools, parseSse } from "../src/proxy/client";
 import { namespaceTool, splitNamespaced } from "../src/proxy/namespace";
-import { pickSubject, redactValue } from "../src/proxy/redact";
+import { pickSubject, redactText, redactValue } from "../src/proxy/redact";
 import { addUpstream, listPublicUpstreams } from "../src/proxy/upstreams";
 import { renderHtml } from "../src/receipt/html";
 import { SessionBook } from "../src/session/book";
@@ -74,6 +74,78 @@ describe("redaction", () => {
     expect(encoded).not.toContain("sekret");
     expect(encoded).not.toContain("Bearer x");
     expect(encoded).toContain("[redacted]");
+  });
+
+  it("redacts secret values in free text and leaves ordinary prose alone", async () => {
+    const shapes = [
+      "sk_test_51H1234567890abcd",
+      "sk_live_51H1234567890abcd",
+      "rk_live_51H1234567890abcd",
+      "ghp_1234567890abcdefghijklmnop",
+      "gho_1234567890abcdefghijklmnop",
+      "ghs_1234567890abcdefghijklmnop",
+      "github_pat_11AAAAAAA0123456789abcdef",
+      "xoxb-123456789012-abcdefghijklmnopqrstuv",
+      "AKIAIOSFODNN7EXAMPLE",
+      "AIzaSyD1234567890abcdefghijklmnopqrst",
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",
+      "MIIBsecretvalue",
+    ];
+    const question = [
+      "api_key=sk_test_51H1234567890abcd",
+      "password=hunter2",
+      "Authorization: Bearer ghp_1234567890abcdefghijklmnop",
+      "gho_1234567890abcdefghijklmnop",
+      "ghs_1234567890abcdefghijklmnop",
+      "github_pat_11AAAAAAA0123456789abcdef",
+      "sk_live_51H1234567890abcd",
+      "rk_live_51H1234567890abcd",
+      "xoxb-123456789012-abcdefghijklmnopqrstuv",
+      "AKIAIOSFODNN7EXAMPLE",
+      "AIzaSyD1234567890abcdefghijklmnopqrst",
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIBsecretvalue\n-----END RSA PRIVATE KEY-----",
+    ].join(" ");
+    const cleaned = redactText(question);
+    for (const shape of ["hunter2", ...shapes]) expect(cleaned).not.toContain(shape);
+    expect(cleaned).toContain("[redacted]");
+    const prose = "How does React reconcile a token bucket with a password reset email? The keynote covered the public API and a cookie recipe: chocolate chip.";
+    expect(redactText(prose)).toBe(prose);
+
+    const book = new SessionBook();
+    const meta = new MemoryMetadataStore();
+    const objects = new MemoryObjectStore();
+    const deps = {
+      userId: "42",
+      login: "octocat",
+      now,
+      timeZone: "UTC",
+      maxRepos: 25,
+      receiptRetentionDays: 90,
+      snapshotRetentionHours: 24,
+      abandonedSessionDays: 7,
+      sessions: sessionPortFromBook(book),
+      meta,
+      objects,
+      github: idleGithub(),
+    };
+    await recordProxyCall(deps, {
+      upstream: "deepwiki",
+      tool: "ask_wiki_question",
+      args: { question },
+      ok: true,
+      status: "ok",
+      summary: `Asked about ${question}`,
+      classification: classifyToolName("ask_wiki_question"),
+      durationMs: 3,
+      result: question,
+    });
+    await logAction(deps, { tool: "notes", action: "modified", target: `Saved password=hunter2`, detail: question, before: "ghp_1234567890abcdefghijklmnop", after: "done" });
+    const ended = await endSession(deps, {});
+    const stored = JSON.stringify({ receipt: ended.receipt, html: ended.html });
+    for (const shape of ["hunter2", ...shapes]) expect(stored).not.toContain(shape);
+    const saved = [...objects.objects.values()].map((item) => item.body).join("\n");
+    for (const shape of ["hunter2", ...shapes]) expect(saved).not.toContain(shape);
   });
 });
 

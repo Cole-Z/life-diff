@@ -13,7 +13,7 @@ import { renderHtml } from "../receipt/html";
 import type { ClaimInput, ClaimResult, Receipt, RecordedAction } from "../receipt/types";
 import { SessionBook, type LoggedAction, type NewAction, type OpenSession } from "../session/book";
 import type { Classification } from "../proxy/classify";
-import { boundJson, redactSnippet } from "../proxy/redact";
+import { boundJson, redactSnippet, redactStrings, redactText } from "../proxy/redact";
 import { attachReadClaims, corroborateActions } from "../receipt/corroborate";
 import { phraseAction } from "../receipt/phrase";
 import type { MetadataStore, ObjectStore, ReceiptMeta } from "../storage/types";
@@ -180,6 +180,7 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
   }
   addUnverifiedClaims(receipt, hasSnapshot ? prepared.filter((claim) => !isGitHubClaimService(claim.service)) : prepared, hasSnapshot);
   attachReadClaims(receipt, folded.readClaims);
+  receipt = redactStrings(receipt);
   const jsonKey = `receipts/${deps.userId}/${receiptId}.json`;
   const htmlKey = `receipts/${deps.userId}/${receiptId}.html`;
   try {
@@ -189,7 +190,7 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
   } catch {
     delete receipt.cardToken;
   }
-  const html = renderHtml(receipt);
+  const html = redactText(renderHtml(receipt));
   await deps.objects.put(jsonKey, JSON.stringify(receipt), "application/json");
   await deps.objects.put(htmlKey, html, "text/html; charset=utf-8");
   await deps.meta.insertReceipt({
@@ -419,13 +420,13 @@ export async function recordProxyCall(deps: CoreDeps, input: {
     id: newId("act", deps.now),
     loggedAt: deps.now.toISOString(),
     tool: input.tool.slice(0, 200),
-    target: input.summary.slice(0, 500),
+    target: redactText(input.summary).slice(0, 500),
     source: "proxy",
     upstream: input.upstream,
     arguments: boundJson(input.args),
     ok: input.ok,
     status: input.status,
-    summary: input.summary,
+    summary: redactText(input.summary),
     effect: input.classification.effect,
     tone: input.classification.tone,
     durationMs: input.durationMs,
@@ -446,7 +447,7 @@ export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId
     throw new AppError(error instanceof Error ? error.message : "Invalid action");
   }
   const tool = input.tool.trim();
-  const target = input.target.trim();
+  const target = redactText(input.target.trim());
   const read = normalized.action === "read";
   const derived = serviceFromTool(tool);
   const tone = read ? "read" as const : claimTone(normalized.action);
@@ -465,8 +466,8 @@ export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId
     status: "ok",
     arguments: {
       subject: target,
-      ...(normalized.before ? { before: normalized.before } : {}),
-      ...(normalized.after ? { after: normalized.after } : {}),
+      ...(normalized.before ? { before: redactText(normalized.before) } : {}),
+      ...(normalized.after ? { after: redactText(normalized.after) } : {}),
       ...(normalized.url ? { url: normalized.url } : {}),
     },
     summary: read
@@ -479,7 +480,7 @@ export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId
       })
       : target,
     ...normalized,
-    ...(input.detail?.trim() ? { detail: input.detail.trim() } : {}),
+    ...(input.detail?.trim() ? { detail: redactText(input.detail.trim()) } : {}),
     ...(input.client?.trim() ? { client: input.client.trim().slice(0, 80) } : {}),
   });
 }
@@ -520,7 +521,7 @@ function addUnverifiedClaims(receipt: Receipt, claims: ClaimInput[], hasSnapshot
     const github = isGitHubClaimService(claim.service);
     added.push({
       id,
-      target: claim.target,
+      target: redactText(claim.target),
       status: "missing",
       reason: github && !hasSnapshot
         ? "This session did not snapshot GitHub, so Life Diff could not verify this claim."
@@ -529,10 +530,10 @@ function addUnverifiedClaims(receipt: Receipt, claims: ClaimInput[], hasSnapshot
           : "Life Diff cannot check this service. This is what the agent reported.",
       ...(claim.service ? { service: claim.service } : {}),
       ...(claim.action ? { action: claim.action } : {}),
-      ...(claim.detail ? { detail: claim.detail } : {}),
+      ...(claim.detail ? { detail: redactText(claim.detail) } : {}),
       ...(claim.repo ? { repo: claim.repo } : {}),
-      ...(claim.before ? { before: claim.before } : {}),
-      ...(claim.after ? { after: claim.after } : {}),
+      ...(claim.before ? { before: redactText(claim.before) } : {}),
+      ...(claim.after ? { after: redactText(claim.after) } : {}),
       ...(claim.url ? { url: claim.url } : {}),
     });
   }
@@ -548,7 +549,7 @@ export async function getReceipt(deps: CoreDeps, receiptId: string): Promise<{ r
   const json = await deps.objects.get(meta.jsonKey);
   const html = await deps.objects.get(meta.htmlKey);
   if (!json || !html) throw new AppError("That receipt is no longer stored.");
-  return { receipt: JSON.parse(json) as Receipt, html, meta };
+  return { receipt: redactStrings(JSON.parse(json) as Receipt), html: redactText(html), meta };
 }
 
 export async function listReceipts(deps: CoreDeps, limit: number): Promise<ReceiptMeta[]> {

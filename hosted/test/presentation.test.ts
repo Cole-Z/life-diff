@@ -3,10 +3,10 @@ import { endSession, logAction, recordProxyCall, sessionPortFromBook, startSessi
 import { classifyToolName } from "../src/proxy/classify";
 import { forwardToolCall, toolFailure } from "../src/proxy/forward";
 import { redactSnippet } from "../src/proxy/redact";
-import { renderCardPng } from "../src/receipt/card";
+import { planCard, renderCardPng } from "../src/receipt/card";
 import { claimSentence } from "../src/receipt/present";
-import { receiptPresentation, buildRoundup } from "../src/receipt/roundup";
-import { cardRows, condenseLines, headlineFor, isQuiet, storyFromReceipt, trustLabel, type StoryLine } from "../src/receipt/story";
+import { receiptPresentation, buildRoundup, sessionToolPayload } from "../src/receipt/roundup";
+import { cardRows, chatText, condenseLines, headlineFor, isQuiet, renderStory, storyFromReceipt, trustLabel, type StoryLine } from "../src/receipt/story";
 import { SessionBook } from "../src/session/book";
 import { MemoryMetadataStore, MemoryObjectStore } from "../src/storage/memory";
 import type { GitHubApi } from "../src/github/types";
@@ -30,11 +30,11 @@ describe("1. unverified claims stay on the receipt", () => {
     expect(ended.receipt.claims[0]?.service).not.toBe("github");
     expect(ended.receipt.claims[0]?.status).toBe("missing");
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
-    expect(headlineFor(lines, "This session")).toBe("1 change reported, not verified");
+    expect(headlineFor(lines, "This session")).toBe("1 change needs a look");
     expect(lines.some((line) => line.service === "Google Calendar" && line.summary.includes("Pitney Bowes"))).toBe(true);
     expect(lines.find((line) => line.summary.includes("Pitney Bowes"))?.trust).toBe("Agent says it did this, not verified");
     const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
-    expect(day.markdown).toContain("1 change reported, not verified");
+    expect(day.markdown).toContain("1 change needs a look");
     expect(day.markdown).toContain("Pitney Bowes");
     expect(day.markdown).toContain("**Google Calendar**");
   });
@@ -50,7 +50,7 @@ describe("1. unverified claims stay on the receipt", () => {
       reason: "No matching change showed up in GitHub.",
     }]);
     const lines = condenseLines(storyFromReceipt(receipt), { detail: false });
-    expect(headlineFor(lines, "This session")).toBe("1 change reported, not verified");
+    expect(headlineFor(lines, "This session")).toBe("1 change needs a look");
     expect(lines.find((line) => line.write)?.service).toBe("Google Calendar");
   });
 });
@@ -153,6 +153,18 @@ describe("5. quiet when nothing changed", () => {
     expect(shown.markdown).not.toContain("Full receipt");
     expect(shown.markdown).not.toContain("GitHub not checked");
     expect(shown.imageUrl).toContain("/card.png?t=");
+    const payload = sessionToolPayload({
+      summary: "quiet",
+      receipt: ended.receipt,
+      markdown: shown.markdown,
+      url: `https://lifediff.dev/receipts/${ended.receipt.id}`,
+      quiet: true,
+      ...(shown.imageUrl ? { imageUrl: shown.imageUrl } : {}),
+    });
+    expect(payload.imageUrl).toBeUndefined();
+    expect((payload.receipt as Receipt).cardToken).toBeUndefined();
+    expect(ended.receipt.cardToken).toBeTruthy();
+    expect(ended.receipt.notes.join("\n")).toContain("GitHub not checked this session.");
     expect(meta.receipts.size).toBe(1);
     expect(isQuiet(shown.lines)).toBe(true);
     const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
@@ -176,10 +188,11 @@ describe("6. cards name the service and keep color", () => {
     expect(rows[1]?.text).toContain("Sent to Gmail, not verified");
     expect(rows[2]?.text).toContain("GitHub");
     expect(rows[2]?.text).toContain("Verified in GitHub");
-    expect(rows.map((row) => row.color)).toEqual(["#6b4300", "#8d1c1c", "#0f5c32"]);
+    expect(rows.map((row) => row.color)).toEqual(["#F5A524", "#8d1c1c", "#0f5c32"]);
     const png = await renderCardPng(lines, "Life Diff", "This session");
     const pixels = await decodePng(png);
-    expect(hasColor(pixels.rgb, [107, 67, 0])).toBe(true);
+    expect(hasColor(pixels.rgb, [245, 165, 36])).toBe(true);
+    expect(hasColor(pixels.rgb, [107, 67, 0])).toBe(false);
     expect(hasColor(pixels.rgb, [141, 28, 28])).toBe(true);
     expect(hasColor(pixels.rgb, [15, 92, 50])).toBe(true);
   });
@@ -197,11 +210,22 @@ describe("7. soft errors", () => {
     await forwardToolCall(deps, toolFetch({ content: [{ type: "text", text: "Error: quota exceeded" }] }), target, "create_page", { title: "Launch" });
     const logged = book.list(book.getOpen()!.id);
     expect(logged[0]?.ok).toBe(false);
-    expect(logged[0]?.summary).toBe("Failed in Notes.");
+    expect(logged[0]?.summary).toBe("Failed in Notes");
     const ended = await endSession(deps, {});
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
     expect(lines[0]?.tone).toBe("failed");
-    expect(lines[0]?.summary).toContain("Failed in Notes");
+    expect(lines[0]?.summary).toBe("Failed in Notes. Quota exceeded");
+    const markdown = renderStory({
+      headline: headlineFor(lines, "This session"),
+      lines,
+      link: "https://lifediff.dev/receipts/rcpt",
+      linkLabel: "Full receipt",
+    });
+    expect(markdown).toContain("⚠️ Failed in Notes. Quota exceeded");
+    expect(markdown).not.toContain("Sent to Notes");
+    expect(markdown).not.toContain("Failed in Notes. ·");
+    expect(cardRows(lines)[0]?.text).toContain("Quota exceeded");
+    expect(cardRows(lines)[0]?.text).not.toContain("Sent to");
   });
 });
 
@@ -270,6 +294,97 @@ describe("9. daily totals drop a duplicate stored read", () => {
     });
     const day = await buildRoundup({ ...base(book, meta), objects, issuer: "https://lifediff.dev" }, { save: false });
     expect(day.markdown).toBe("Nothing changed · 1 lookup");
+  });
+});
+
+describe("qa follow-ups", () => {
+  it("lists every detail lookup, and the card says when lines were left out", async () => {
+    const book = new SessionBook();
+    const meta = new MemoryMetadataStore();
+    const deps = base(book, meta);
+    await startSession(deps, {});
+    for (let index = 0; index < 7; index += 1) {
+      await recordProxyCall(deps, {
+        upstream: "deepwiki",
+        tool: "read_wiki_contents",
+        args: { repoName: `repo-${index}` },
+        ok: true,
+        status: "ok",
+        summary: `Looked up repo-${index}.`,
+        classification: { effect: "read", tone: "read", verb: "read" },
+        durationMs: 2,
+      });
+    }
+    await endSession(deps, {});
+    const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false, detail: true });
+    const listed = day.markdown.split("\n").filter((line) => line.includes("repo-")).length;
+    expect(day.lines.filter((line) => line.tone === "read")).toHaveLength(7);
+    expect(listed).toBe(7);
+    expect(day.markdown).toContain("Nothing changed · 7 lookups");
+    const crowded = Array.from({ length: 14 }, (_, index) => story("created", "Notion", "verified", true, `Created page ${index} ${"with extra words ".repeat(12)}`));
+    const plan = planCard(crowded);
+    expect(plan.filter((row) => row.bullet).length).toBeLessThanOrEqual(12);
+    expect(plan.some((row) => row.text === "+2 more")).toBe(true);
+    const long = plan.filter((row) => row.text.startsWith("Notion:") || row.text.includes("Created page"));
+    const groups: { bullet: boolean }[][] = [];
+    for (const row of plan) {
+      if (row.text.startsWith("+")) continue;
+      if (row.bullet || groups.length === 0) groups.push([row]);
+      else groups[groups.length - 1]?.push(row);
+    }
+    expect(groups.every((group) => group.length <= 2 && group[0]?.bullet === true && group.slice(1).every((row) => !row.bullet))).toBe(true);
+    expect(long.length).toBeGreaterThan(0);
+  });
+
+  it("names the trust on lookup rows only when sources are mixed", () => {
+    const mixed = condenseLines([
+      ...Array.from({ length: 7 }, (_, index) => story("read", "DeepWiki", "proxy", false, `Looked up ${index}`)),
+      story("read", "DeepWiki", "claim", false, "Looked up the claim"),
+    ], { detail: false });
+    const markdown = renderStory({
+      headline: headlineFor(mixed, "Today"),
+      lines: mixed,
+      link: "https://lifediff.dev/roundup/2026-04-02",
+      linkLabel: "Full day",
+    });
+    expect(markdown).toContain("7 lookups · Sent to DeepWiki, not verified");
+    expect(markdown).toContain("1 lookup · Agent says it did this, not verified");
+    expect(cardRows(mixed).map((row) => row.text).join("\n")).toContain("Sent to DeepWiki, not verified");
+    expect(cardRows(mixed).map((row) => row.text).join("\n")).toContain("Agent says it did this, not verified");
+    const single = condenseLines([
+      story("read", "DeepWiki", "proxy", false, "Looked up a"),
+      story("read", "DeepWiki", "proxy", false, "Looked up b"),
+    ], { detail: false });
+    const short = renderStory({
+      headline: headlineFor(single, "Today"),
+      lines: single,
+      link: "https://lifediff.dev/roundup/2026-04-02",
+      linkLabel: "Full day",
+    });
+    expect(short).toContain("2 lookups");
+    expect(short).not.toContain("Sent to");
+    expect(cardRows(single)[0]?.text).not.toContain("Sent to");
+    const mixedChat = chatText({
+      headline: headlineFor(mixed, "Today"),
+      lines: mixed,
+      link: "https://lifediff.dev/roundup/2026-04-02",
+      linkLabel: "Full day",
+    });
+    expect(mixedChat.quiet).toBe(true);
+    expect(mixedChat.markdown).toContain("7 lookups · Sent to DeepWiki, not verified");
+    expect(mixedChat.markdown).toContain("1 lookup · Agent says it did this, not verified");
+  });
+
+  it("uses one headline for a checked change and one that needs a look", () => {
+    const lines = [
+      story("created", "GitHub", "verified", true, "Opened a pull request"),
+      story("created", "Gmail", "proxy", true, "Sent a note"),
+      story("changed", "Google Calendar", "claim", true, "Moved the call"),
+      story("failed", "Notion", "proxy", false, "Failed in Notion"),
+    ];
+    expect(headlineFor(lines, "This session")).toBe("3 changes, 2 need a look");
+    expect(headlineFor(lines, "Today")).toBe("3 changes, 2 need a look");
+    expect(headlineFor([story("changed", "Google Calendar", "claim", true, "Moved the call")], "Today")).toBe("1 change needs a look");
   });
 });
 

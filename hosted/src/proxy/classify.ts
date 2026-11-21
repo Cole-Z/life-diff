@@ -12,7 +12,7 @@ export interface Classification {
 
 const CREATED = new Set(["create", "add", "insert"]);
 const CHANGED = new Set(["update", "move", "write", "post", "edit", "patch", "set", "rename"]);
-const REMOVED = new Set(["delete", "remove", "send"]);
+const REMOVED = new Set(["delete", "remove", "send", "share", "unshare", "revoke", "trash"]);
 const READ = new Set(["get", "list", "search", "read", "fetch", "query", "ask", "describe", "lookup", "check"]);
 
 /** A write verb wins over a read verb. delete, remove, and send win over other writes. */

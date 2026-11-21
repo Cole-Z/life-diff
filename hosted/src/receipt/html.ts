@@ -1,4 +1,5 @@
 import { escapeHtml, formatInstant } from "../text";
+import { displayName } from "./names";
 import { renderDiffPage } from "./page";
 import { condenseLines, headlineFor, storyFromReceipt } from "./story";
 import type { ClaimResult, Receipt } from "./types";
@@ -27,14 +28,15 @@ function renderClaims(receipt: Receipt): string {
   const body = receipt.claims.length === 0
     ? `<p class="empty">The agent claimed that nothing changed.</p>`
     : receipt.claims.map(renderClaim).join("");
-  return `<section class="claims"><h2>What the agent said</h2><p class="source">A change is verified when GitHub shows it. A read is verified when it matches a call Life Diff forwarded.</p>${body}</section>`;
+  return `<section class="claims"><h2>What the agent said</h2><p class="source">Verified in a service means Life Diff checked that service. Anything else is what the agent reported.</p>${body}</section>`;
 }
 
 function renderClaim(claim: ClaimResult): string {
   const verified = claim.status === "verified";
-  const title = claim.action === "read"
-    ? `${verified ? "Seen by Life Diff" : "Reported by the agent"}: ${JSON.stringify(claim.target)}`
-    : `${verified ? "Verified" : "Missing"} ${JSON.stringify(claim.target)} in GitHub${claim.action ? ` (${claim.action})` : ""}`;
+  const service = displayName(claim.service || "Service");
+  const title = verified
+    ? `Verified in ${service}: ${claim.target}`
+    : `Agent says it did this, not verified: ${claim.target}`;
   return `<article class="row is-${verified ? "created" : "changed"}">
       <p class="summary">${verified ? ICON_VERIFIED : ICON_MISSING} ${escapeHtml(title)}</p>
       ${claim.detail ? `<p>${escapeHtml(claim.detail)}</p>` : ""}

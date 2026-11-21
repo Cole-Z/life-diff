@@ -2,7 +2,7 @@ import type { CoreDeps } from "../app/service";
 import { corroborateActions } from "./corroborate";
 import { bytesToBase64, renderCardPng } from "./card";
 import { renderDiffPage } from "./page";
-import { condenseLines, headlineFor, renderStory, storyFromActions, storyFromChanges, storyFromReceipt, type StoryLine } from "./story";
+import { chatText, condenseLines, headlineFor, isQuiet, storyFromActions, storyFromChanges, storyFromReceipt, storyFromUnverifiedClaims, visibleActions, type StoryLine } from "./story";
 import { dayWindow, localClock, type UserSettings } from "../time";
 import type { Receipt } from "./types";
 
@@ -18,6 +18,7 @@ export interface Roundup {
   imageUrl?: string;
   cardToken?: string;
   finalized: boolean;
+  quiet: boolean;
 }
 
 export function roundupJsonKey(userId: string): string {
@@ -69,12 +70,13 @@ export async function buildRoundup(deps: CoreDeps & { issuer: string }, input: {
   const imageUrl = token ? `${origin}/roundup/card.png?t=${token}` : undefined;
   const label = day === today ? "Today" : day;
   const headline = headlineFor(lines, label);
-  const markdown = renderStory({
+  const chat = chatText({
     headline,
     lines,
     link: page,
     linkLabel: "Full day",
   });
+  const markdown = chat.markdown;
   const html = renderDiffPage({
     title: `Life Diff ${day}`,
     lede: "What your agents changed.",
@@ -127,6 +129,7 @@ export async function buildRoundup(deps: CoreDeps & { issuer: string }, input: {
     finalized: Boolean(finalizedAt),
     ...(imageUrl ? { imageUrl } : {}),
     ...(token ? { cardToken: token } : {}),
+    quiet: chat.quiet,
   };
 }
 
@@ -152,20 +155,21 @@ export async function loadRoundup(deps: CoreDeps & { issuer: string }, day?: str
     finalized: true,
     imageUrl: `${deps.issuer.replace(/\/$/, "")}/roundup/card.png?t=${stored.cardToken}`,
     cardToken: stored.cardToken,
+    quiet: isQuiet(stored.lines),
   };
 }
 
-export async function receiptPresentation(deps: CoreDeps, receipt: Receipt, link: string): Promise<{ markdown: string; png: Uint8Array; imageUrl?: string }> {
+export async function receiptPresentation(deps: CoreDeps, receipt: Receipt, link: string): Promise<{ markdown: string; png: Uint8Array; imageUrl?: string; lines: StoryLine[]; quiet: boolean }> {
   const lines = condenseLines(storyFromReceipt(receipt), { detail: false });
   const imageUrl = receipt.cardToken ? `${link}/card.png?t=${receipt.cardToken}` : undefined;
-  const markdown = renderStory({
+  const chat = chatText({
     headline: headlineFor(lines, "This session"),
     lines,
     link,
     linkLabel: "Full receipt",
   });
   const png = await renderCardPng(lines, "Life Diff", "This session");
-  return { markdown, png, ...(imageUrl ? { imageUrl } : {}) };
+  return { markdown: chat.markdown, png, lines, quiet: chat.quiet, ...(imageUrl ? { imageUrl } : {}) };
 }
 
 export function pngContent(png: Uint8Array): { type: "image"; data: string; mimeType: "image/png" } | null {
@@ -186,8 +190,9 @@ async function collectLines(deps: CoreDeps, settings: UserSettings, window: { st
     } catch {
       continue;
     }
-    const actions = (receipt.actions ?? []).filter((action) => action.time >= window.start && action.time < window.end && (!after || action.time >= after));
+    const actions = visibleActions(receipt).filter((action) => action.time >= window.start && action.time < window.end && (!after || action.time >= after));
     raw.push(...storyFromActions(actions));
+    raw.push(...storyFromUnverifiedClaims(receipt.claims, new Set(actions.map((action) => action.id))));
     const stamped = receipt.generatedAt >= window.start && receipt.generatedAt < window.end;
     if (stamped && settings.githubDaily && receipt.github?.optIn === true) {
       const changes = after

@@ -6,7 +6,7 @@ Life Diff is what all your AI agents changed across your tools today. GitHub is 
 
 ## What you get
 
-The first line says whether to care. Writes come first, in plain words, with a link when one is known. Lookups collapse to one quiet line per service. A failure is red and says why. A line GitHub confirmed says **Confirmed by GitHub**. A call Life Diff forwarded says **Seen by Life Diff**. A lookup only the agent reported says **Reported by the agent**.
+The first line says whether to care. Anything that needs a look comes first: a change the agent reported but Life Diff could not check, a failed call, and a delete, send, or permission change. Those lines are amber or red. Checked changes come next, in the same colors as before. Lookups collapse to one short line per service. A line checked against a service's own history says **Verified in GitHub** (or that service). A call Life Diff forwarded says **Sent to Gmail, not verified**. A change only the agent reported says **Agent says it did this, not verified**.
 
 ![The same receipt in dark mode](docs/images/receipt-dark.webp)
 
@@ -66,41 +66,45 @@ Reconnect if the client cached the tool list. The tools are named `deepwiki__rea
 
 4. Work normally. The first proxied call opens a session if none is open. Ask the agent to call `end_session` before its final reply. An idle session closes itself after 20 minutes (change that on the settings page) and writes the receipt then. At the end of the day, `get_daily_diff` (`get_roundup` is the same tool) is the whole day. The page is [lifediff.dev/roundup](https://lifediff.dev/roundup).
 
-Pass `repos` to `start_session` only for repositories you want checked. Leave it out and GitHub is not read. Turn on **Include GitHub repository changes** in settings before those changes appear on the daily page. `log_action` takes `action` as `added`, `removed`, `modified`, or `read`. A read is counted with the lookups.
+Pass `repos` to `start_session` only for repositories you want checked. Leave it out and GitHub is not read. Turn on **Include GitHub repository changes** in settings before those changes appear on the daily page. `log_action` is only for a change made outside Life Diff. Skip reads, and skip a tool already called through Life Diff. Optional `before` and `after` are the old and new values, such as a moved event's times. Optional `url` is an https link to the object. A GitHub change is checked only when this session snapshotted GitHub. Anything else is shown as reported, not verified. Show the receipt only when something changed. When nothing changed, rely on the daily diff.
 
 5. This is the receipt the agent shows. The card image comes with the tool result. The markdown does not include the card token.
 
 ```markdown
-4 things changed, 1 needs a look
+3 things changed, 2 need a look
+
+**Google Calendar**
+🟡 Moved "Design Sync" · Tue 2:00 PM → Thu 3:00 PM · [Open](https://calendar.google.com/calendar/event?eid=demo) · Agent says it did this, not verified · Undo not available yet
+
+**Notion**
+⚠️ Failed in Notion. The page was not saved. · Sent to Notion, not verified · Cursor
+
+**Gmail**
+🔴 Sent 'Notes for Friday' from Gmail. · [Open](https://mail.google.com/mail/u/0/#drafts/demo) · Sent to Gmail, not verified · Undo not available yet · Grok Bot
 
 **GitHub**
 cole-z/cardpost
-🟢 Opened pull request "Fix login" (#12) on cole-z/cardpost. · [Open](https://github.com/cole-z/cardpost/pull/12) · Confirmed by GitHub
-
-**Gmail**
-🔴 Sent 'Notes for Friday' from Gmail. · [Open](https://mail.google.com/mail/u/0/#drafts/demo) · Seen by Life Diff · Grok Bot
-
-**Google Calendar**
-🟢 Created event 'Team standup' in Google Calendar. · [Open](https://calendar.google.com/calendar/r/eventedit/demo) · Seen by Life Diff · Delete this event · Grok Bot
+🟢 Opened pull request "Fix login" (#12) on cole-z/cardpost. · [Open](https://github.com/cole-z/cardpost/pull/12) · Verified in GitHub · Undo not available yet
 
 **Google Drive**
-🟡 Renamed 'Q2 goals' to 'Q2 plan' in Google Drive. · [Open](https://drive.google.com/file/d/demo/view) · Seen by Life Diff · Cursor
-
-**Notion**
-⚠️ Could not create page 'Launch checklist' in Notion. The page was not saved. · Seen by Life Diff · Cursor
+🟡 Renamed 'Q2 goals' to 'Q2 plan' in Google Drive. · [Open](https://drive.google.com/file/d/demo/view) · Sent to Google Drive, not verified · Undo not available yet · Cursor
 
 **DeepWiki**
-⚪ 2 lookups · Seen by Life Diff · Grok Bot
+⚪ 2 lookups · Grok Bot
 
 **Slack**
-⚪ 1 lookup · Seen by Life Diff · Cursor
+⚪ 1 lookup · Cursor
 
 Full receipt: https://lifediff.dev/receipts/rcpt_demo
 ```
 
-A day or a session with only lookups starts `Nothing changed · 2 lookups`. With nothing at all, both say `Nothing changed`. A read the agent logs on top of a call Life Diff already forwarded is counted once.
+A day or a session with only lookups is one line, `Nothing changed · 2 lookups`, with no card attached. The receipt is still saved, and its card is at the receipt URL. With nothing at all, both say `Nothing changed`. A read stored beside a matching call Life Diff already forwarded is counted once.
 
 Life Diff only sees calls routed through it. It does not block, rewrite, or retry a call. A missing list item is not a deletion. Tokens are encrypted and are never returned or written to a log.
+
+## What Life Diff stores
+
+A receipt stores the service, what happened, and whether Life Diff checked it. For a call Life Diff forwarded, it also stores the tool name, the arguments, and a short result. Before those are saved, values whose keys contain `token`, `password`, `secret`, `authorization`, `api_key`, `cookie`, `credential`, or `key` are replaced with `[redacted]`, including nested keys. Result text is cut to a short snippet. File contents, message bodies, and sign-in tokens are not on the receipt. You can delete this history on the settings page or by asking the agent to call `clear_my_history`.
 
 ### On this computer
 

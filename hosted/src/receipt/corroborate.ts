@@ -3,6 +3,61 @@ import { fold } from "../text";
 import { recordedFrom } from "./actions";
 import type { ClaimResult, Receipt, RecordedAction } from "./types";
 
+/**
+ * Drop a stored read claim that was saved beside the proxied read it describes.
+ * Older receipts stored that claim with source `proxy`, so it was counted twice.
+ * Two real lookups of the same tool are left as they are.
+ */
+export function dedupeStoredReads(actions: RecordedAction[]): RecordedAction[] {
+  const drop = new Set<string>();
+  for (const action of actions) {
+    if (!isStoredRead(action) || !loggedReadShape(action)) continue;
+    const match = actions.find((other) => (
+      other.id !== action.id
+      && !drop.has(other.id)
+      && isStoredRead(other)
+      && !loggedReadShape(other)
+      && sameUpstream(action, other)
+      && readOverlaps(action, other)
+    ));
+    if (match) drop.add(action.id);
+  }
+  if (drop.size === 0) return actions;
+  return actions.filter((action) => !drop.has(action.id));
+}
+
+function isStoredRead(action: RecordedAction): boolean {
+  return action.effect === "read" || action.tone === "read";
+}
+
+function loggedReadShape(action: RecordedAction): boolean {
+  if (action.source === "claim") return true;
+  if (fold(action.tool) !== "" && fold(action.tool) === fold(action.upstream)) return true;
+  if (!action.arguments || typeof action.arguments !== "object" || Array.isArray(action.arguments)) return false;
+  const keys = Object.keys(action.arguments as Record<string, unknown>);
+  return keys.length > 0 && keys.every((key) => key === "subject" || key === "target");
+}
+
+function sameUpstream(left: RecordedAction, right: RecordedAction): boolean {
+  return compact(left.upstream) !== "" && compact(left.upstream) === compact(right.upstream);
+}
+
+function readOverlaps(claim: RecordedAction, other: RecordedAction): boolean {
+  const hay = fold(`${other.summary} ${JSON.stringify(other.arguments ?? {})}`);
+  const subject = readSubject(claim);
+  if (subject && fold(subject).length >= 3 && hay.includes(fold(subject))) return true;
+  const repos = fold(`${claim.summary} ${JSON.stringify(claim.arguments ?? {})}`).match(/[a-z0-9_.-]+\/[a-z0-9_.-]+/g) ?? [];
+  return repos.length > 0 && repos.every((repo) => hay.includes(repo));
+}
+
+function readSubject(action: RecordedAction): string | undefined {
+  if (action.arguments && typeof action.arguments === "object" && !Array.isArray(action.arguments)) {
+    const subject = (action.arguments as Record<string, unknown>).subject;
+    if (typeof subject === "string" && subject.trim()) return subject;
+  }
+  return action.summary;
+}
+
 type Kind = "read" | "added" | "removed" | "modified";
 
 const STOP = new Set([
@@ -14,6 +69,8 @@ const STOP = new Set([
 export interface CorroboratedLog {
   recorded: RecordedAction[];
   readClaims: ClaimResult[];
+  /** Claim ids folded into a proxied call, including writes, so they are not shown again. */
+  foldedClaimIds: string[];
 }
 
 /**
@@ -60,13 +117,16 @@ export function corroborateActions(actions: LoggedAction[]): CorroboratedLog {
     recorded.push(corroboratedProxies.has(index) ? { ...row, corroborated: true } : row);
   }
   const readClaims: ClaimResult[] = [];
+  const foldedClaimIds: string[] = [];
   for (let index = 0; index < actions.length; index += 1) {
     const action = actions[index];
-    if (!action || !isReadClaim(action)) continue;
+    if (!action) continue;
+    if (matchedClaims.has(index)) foldedClaimIds.push(action.id);
+    if (!isReadClaim(action)) continue;
     const proxyIndex = claimToProxy.get(index);
     readClaims.push(readClaimResult(action, proxyIndex === undefined ? undefined : actions[proxyIndex]));
   }
-  return { recorded, readClaims };
+  return { recorded, readClaims, foldedClaimIds };
 }
 
 export function attachReadClaims(receipt: Receipt, reads: ClaimResult[]): void {

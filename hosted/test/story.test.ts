@@ -98,9 +98,9 @@ describe("inline receipt", () => {
     expect(markdown).toContain("⚪");
     expect(markdown).toContain("**DeepWiki**");
     expect(markdown).toContain("1 lookup");
-    expect(markdown).toContain("Seen by Life Diff");
-    expect(markdown).toContain("Confirmed by GitHub");
-    expect(markdown).toContain("Reopen");
+    expect(markdown).toContain("Verified in GitHub");
+    expect(markdown).toContain("Undo available");
+    expect(markdown).not.toContain("Reopen");
     expect(markdown).not.toContain("```diff");
     expect(markdown).not.toContain("card.png");
     expect(markdown).not.toContain("read_wiki");
@@ -151,7 +151,8 @@ describe("roundup", () => {
     await endSession({ ...deps, now: new Date("2026-04-02T16:00:00.000Z") }, {});
     const first = await buildRoundup({ ...deps, now: new Date("2026-04-02T16:05:00.000Z") }, { save: true });
     expect(first.markdown).toContain("🟢");
-    expect(first.markdown).toContain("Delete this event");
+    expect(first.markdown).toContain("Undo available");
+    expect(first.markdown).toContain("Sent to Google Calendar, not verified");
     expect(first.markdown).toContain("**Google Calendar**");
     expect(first.markdown).not.toContain("evt_1");
     expect(first.markdown).not.toContain("google_calendar__");

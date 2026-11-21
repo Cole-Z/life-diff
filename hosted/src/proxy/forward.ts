@@ -2,7 +2,7 @@ import type { CoreDeps } from "../app/service";
 import { recordProxyCall } from "../app/service";
 import { classifyToolName, plainAction } from "./classify";
 import { callUpstreamTool, UpstreamError, type UpstreamTarget } from "./client";
-import { boundJson, pickSubject, scrubSecrets } from "./redact";
+import { boundJson, pickSubject, redactSnippet, scrubSecrets } from "./redact";
 
 export interface ToolReply {
   content: { type: "text"; text: string; _meta?: Record<string, unknown> }[];
@@ -18,20 +18,23 @@ export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, t
   try {
     const result = await callUpstreamTool(fetchImpl, target, tool, args);
     const durationMs = Date.now() - started;
-    const failed = result.isError === true;
+    const failure = toolFailure(result);
     const resultText = scrubSecrets(firstText(result), secrets);
-    const summary = plainAction(target.name, classification, pickSubject(boundJson(args)), !failed, tool);
+    const summary = plainAction(target.name, classification, pickSubject(boundJson(args)), !failure.failed, tool);
+    const storedError = failure.failed
+      ? redactSnippet(scrubSecrets(failure.message || resultText || "The upstream reported an error.", secrets))
+      : undefined;
     const sessionId = await recordSafe(deps, {
       upstream: target.name,
       tool,
       args,
-      ok: !failed,
-      status: failed ? "error" : "ok",
+      ok: !failure.failed,
+      status: failure.failed ? "error" : "ok",
       summary,
       classification,
       durationMs,
-      ...(resultText ? { result: resultText } : {}),
-      ...(failed ? { error: resultText || "The upstream reported an error." } : {}),
+      ...(!failure.failed && resultText ? { result: redactSnippet(resultText) } : {}),
+      ...(storedError ? { error: storedError } : {}),
       ...(client ? { client } : {}),
     });
     return withSession(replyFrom(result, target.name, tool), sessionId);
@@ -105,6 +108,48 @@ function replyFrom(result: Record<string, unknown>, upstream: string, tool: stri
     reply.structuredContent = result.structuredContent as Record<string, unknown>;
   }
   return reply;
+}
+
+/** A tool result that reports failure without throwing, including an obvious error payload. */
+export function toolFailure(result: Record<string, unknown>): { failed: boolean; message?: string } {
+  if (result.isError === true) return { failed: true, message: textOf(result.error) || firstText(result) || undefined };
+  if (result.error !== undefined && result.error !== null && result.error !== false) {
+    return { failed: true, message: textOf(result.error) || firstText(result) || undefined };
+  }
+  const text = firstText(result);
+  if (obviousErrorText(text)) return { failed: true, message: text };
+  const structured = result.structuredContent;
+  if (structured && typeof structured === "object" && !Array.isArray(structured)) {
+    const record = structured as Record<string, unknown>;
+    if (record.isError === true || (record.error !== undefined && record.error !== null && record.error !== false)) {
+      return { failed: true, message: textOf(record.error) || text || undefined };
+    }
+  }
+  return { failed: false };
+}
+
+function obviousErrorText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (/^(error|exception|failed|failure)\b[:\s]/i.test(trimmed)) return true;
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    const record = parsed as Record<string, unknown>;
+    return record.isError === true || record.ok === false || (record.error !== undefined && record.error !== null && record.error !== false);
+  } catch {
+    return false;
+  }
+}
+
+function textOf(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const message = (value as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message.trim();
+  }
+  return undefined;
 }
 
 function firstText(result: Record<string, unknown>): string {

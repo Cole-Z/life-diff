@@ -49,6 +49,12 @@ export interface ClaimInput {
   target: string;
   detail?: string;
   repo?: string;
+  /** Previous value, when the agent knows it. Optional and ignored by older readers. */
+  before?: string;
+  /** New value, when the agent knows it. Optional and ignored by older readers. */
+  after?: string;
+  /** HTTPS link to the object. Optional and ignored by older readers. */
+  url?: string;
 }
 
 export interface ClaimResult {
@@ -63,6 +69,9 @@ export interface ClaimResult {
   reason: string;
   resource?: string;
   repo?: string;
+  before?: string;
+  after?: string;
+  url?: string;
   /** True when this claim matches a call Life Diff forwarded in the same session. */
   corroborated?: boolean;
   /** Id of the proxied action this claim was folded into. */

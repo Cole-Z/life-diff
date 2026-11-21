@@ -1,4 +1,5 @@
-const SECRET_KEY = /token|secret|password|authorization|cookie|key/i;
+const SECRET_KEY = /token|secret|password|passwd|authorization|cookie|credential|api[_-]?key|key/i;
+export const RESULT_SNIPPET_LIMIT = 240;
 const PREFERRED_SUBJECTS = ["question", "title", "subject", "name", "query", "q", "text", "message", "prompt", "summary"];
 const LOW_VALUE = new Set(["repo", "owner", "reponame", "repository", "url", "uri", "id", "path", "type", "format", "model", "tool"]);
 
@@ -26,6 +27,29 @@ export function scrubSecrets(message: string, secrets: string[]): string {
     if (bearer.length >= 4 && bearer !== trimmed) out = out.split(bearer).join("[redacted]");
   }
   return out.slice(0, 500);
+}
+
+/** Redact secret-like keys inside a stored result, then cap the snippet. */
+export function redactSnippet(value: string, limit = RESULT_SNIPPET_LIMIT): string {
+  let text = value.trim();
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      text = JSON.stringify(redactValue(JSON.parse(text)));
+    } catch {
+      text = redactLoose(text);
+    }
+  } else {
+    text = redactLoose(text);
+  }
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function redactLoose(text: string): string {
+  return text.replace(
+    /"(token|secret|password|passwd|authorization|api_key|apikey|cookie|credential|access_key|refresh_token)"\s*:\s*"[^"]*"/gi,
+    '"$1":"[redacted]"',
+  );
 }
 
 export function pickSubject(value: unknown): string | undefined {

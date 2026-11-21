@@ -29,6 +29,9 @@ export async function handleData(request: Request, env: Env): Promise<Response> 
         ...(typeof body.detail === "string" ? { detail: body.detail } : {}),
         ...(typeof body.resource === "string" ? { resource: body.resource } : {}),
         ...(typeof body.repo === "string" ? { repo: body.repo } : {}),
+        ...(typeof body.before === "string" ? { before: body.before } : {}),
+        ...(typeof body.after === "string" ? { after: body.after } : {}),
+        ...(typeof body.url === "string" ? { url: body.url } : {}),
       });
       return Response.json({ id: logged.id, target: logged.target });
     }

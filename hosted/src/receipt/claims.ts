@@ -1,5 +1,6 @@
 import { fold } from "../text";
 import { confidenceReason } from "./confidence";
+import { displayName, serviceFromTool, toolMentioned } from "./names";
 import type { Change, ChangeKind, ClaimInput, ClaimResult, ClaimStatus } from "./types";
 
 interface NormalizedClaim {
@@ -92,6 +93,9 @@ export function applyClaims(changes: Change[], inputs: ClaimInput[] | null): { c
     if (claim.raw.detail) result.detail = claim.raw.detail;
     if (claim.resourceType) result.resource = claim.resourceType;
     if (claim.repo) result.repo = claim.repo;
+    if (claim.raw.before) result.before = claim.raw.before;
+    if (claim.raw.after) result.after = claim.raw.after;
+    if (claim.raw.url) result.url = claim.raw.url;
     const chi = match.get(i);
     if (chi !== undefined) {
       const change = next[chi];
@@ -138,6 +142,30 @@ function normalizeClaim(raw: ClaimInput): NormalizedClaim {
     }
   }
   return out;
+}
+
+/** True when this claim names GitHub or a GitHub resource Life Diff can check. */
+export function isGitHubClaimService(service: string | undefined): boolean {
+  if (!service?.trim()) return false;
+  return mapService(fold(service)).service === "github";
+}
+
+/**
+ * Brand name for a stored claim. A tool mentioned in the detail wins over a
+ * service that was defaulted to GitHub before the tool was known.
+ */
+export function serviceForClaim(claim: { service?: string; detail?: string }): string {
+  const tool = toolMentioned(claim.detail);
+  if (tool) {
+    const derived = serviceFromTool(tool);
+    if (derived.key !== "github") return derived.display;
+    return "GitHub";
+  }
+  if (claim.service) {
+    if (isGitHubClaimService(claim.service)) return "GitHub";
+    return displayName(claim.service);
+  }
+  return "Service";
 }
 
 function mapService(service: string): { service: string; resourceType: string } {

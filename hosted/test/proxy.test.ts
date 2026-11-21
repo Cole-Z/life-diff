@@ -185,8 +185,9 @@ describe("upstream forwarding", () => {
     expect(ended.receipt.actions).toHaveLength(3);
     expect(ended.receipt.actions?.[0]?.summary).toBe("Created page 'Q2 goals' in Notes.");
     expect(ended.receipt.changes).toHaveLength(0);
-    expect(ended.html).toContain("Seen by Life Diff");
-    expect(ended.html).toContain("Verified lines come from a service");
+    expect(ended.html).toContain("Sent to Notes, not verified");
+    expect(ended.html).toContain("Failed in Notes");
+    expect(ended.html).toContain("Sent to a service means Life Diff forwarded the call");
     expect(ended.html.indexOf("Created page &#39;Q2 goals&#39;")).toBeLessThan(ended.html.indexOf("<details class=\"reads\">"));
     expect(ended.html).not.toContain("sekret");
     expect(ended.summary).toContain("Created page 'Q2 goals' in Notes.");
@@ -268,7 +269,8 @@ describe("auto session and upstream secrets", () => {
     });
     expect(html).toContain("<details class=\"reads\">");
     expect(html).toContain("badge-read");
-    expect(html).toContain("Seen by Life Diff");
+    expect(html).toContain("1 lookup");
+    expect(html).toContain("DeepWiki");
   });
 });
 

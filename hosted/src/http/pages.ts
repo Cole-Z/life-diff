@@ -77,6 +77,8 @@ export interface SettingsView {
   timeZone: string;
   dayEnd: string;
   githubDaily: boolean;
+  idleMinutes: number;
+  quietDays: boolean;
 }
 
 export function renderSettings(login: string, csrf: string, upstreams: SettingsUpstream[], settings: SettingsView, error?: string): string {
@@ -102,6 +104,8 @@ export function renderSettings(login: string, csrf: string, upstreams: SettingsU
       <label>End of workday <input name="dayEnd" type="time" required value="${escapeHtml(settings.dayEnd)}"></label>
       <label><input type="checkbox" name="githubDaily" value="on" ${settings.githubDaily ? "checked" : ""}> Include GitHub repository changes in the daily diff</label>
       <p>Off until you turn it on. Life Diff only reads repositories you name in <code>start_session</code>.</p>
+      <label>Quiet minutes before a session closes <input name="idleMinutes" type="number" min="5" max="180" required value="${escapeHtml(String(settings.idleMinutes))}"></label>
+      <label><input type="checkbox" name="quietDays" value="on" ${settings.quietDays ? "checked" : ""}> Don't save the daily page when nothing changed</label>
       <button>Save</button>
     </form>
     <h2>Tools your agents use</h2>

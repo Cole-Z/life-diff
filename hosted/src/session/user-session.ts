@@ -26,6 +26,12 @@ export class UserSession extends DurableObject<Env> {
     return (await this.load()).list(sessionId);
   }
 
+  async touch(sessionId: string, at: string): Promise<void> {
+    const book = await this.load();
+    book.touch(sessionId, at);
+    await this.save(book);
+  }
+
   async close(sessionId: string): Promise<void> {
     const book = await this.load();
     book.close(sessionId);

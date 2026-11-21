@@ -1,9 +1,10 @@
-import { fromJsonSchema, type McpServer } from "@modelcontextprotocol/server";
+import { fromJsonSchema, type McpServer, type ServerContext } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { coreDeps } from "../app/runtime";
 import { bindFetch } from "../bind-fetch";
 import type { Env } from "../env";
 import { listUpstreamTools, type UpstreamTarget, type UpstreamToolInfo } from "../proxy/client";
+import { clientName } from "./client-name";
 import { forwardToolCall } from "../proxy/forward";
 import { namespaceTool } from "../proxy/namespace";
 import { loadTargets } from "../proxy/upstreams";
@@ -46,8 +47,8 @@ export async function registerUpstreamTools(server: McpServer, env: Env, user: {
         title: `${target.name}: ${tool.title || tool.name}`.slice(0, 120),
         description: `${description} Recorded by Life Diff.`,
         inputSchema: schemaFor(tool.inputSchema),
-      }, async (args) => {
-        const reply = await forwardToolCall(coreDeps(env, user), fetchImpl, target, tool.name, args);
+      }, async (args, ctx: ServerContext) => {
+        const reply = await forwardToolCall(coreDeps(env, user), fetchImpl, target, tool.name, args, clientName(server, ctx));
         return {
           content: reply.content,
           ...(reply.isError ? { isError: true } : {}),

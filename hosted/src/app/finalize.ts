@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import type { GitHubApi } from "../github/types";
 import { dueDays } from "../time";
 import { appDeps, coreDeps } from "./runtime";
-import { sealOpenSession, type AppDeps } from "./service";
+import { closeIdleSession, sealOpenSession, type AppDeps } from "./service";
 import { D1MetadataStore } from "../storage/d1";
 import { buildRoundup } from "../receipt/roundup";
 
@@ -13,11 +13,12 @@ export async function finalizeDueDays(env: Env, now: Date): Promise<number> {
   for (const user of users) {
     try {
       const settings = await meta.getSettings(user.id);
+      const deps = await depsFor(env, user, now);
+      await closeIdleSession(deps, deps.github);
       const saved = await meta.listDaily(user.id);
       const finalized = new Set(saved.filter((row) => row.finalizedAt).map((row) => row.day));
       const due = dueDays(now, settings.timeZone, settings.dayEnd, finalized);
       if (due.length === 0) continue;
-      const deps = await depsFor(env, user, now);
       await sealOpenSession(deps);
       for (const day of due) {
         await buildRoundup({ ...deps, issuer: env.ISSUER }, { date: day, save: true, finalize: true });

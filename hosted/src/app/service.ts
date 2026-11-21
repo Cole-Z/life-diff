@@ -13,6 +13,7 @@ import { SessionBook, type LoggedAction, type NewAction, type OpenSession } from
 import type { Classification } from "../proxy/classify";
 import { boundJson } from "../proxy/redact";
 import { recordedFrom } from "../receipt/actions";
+import { phraseAction } from "../receipt/phrase";
 import type { MetadataStore, ObjectStore, ReceiptMeta } from "../storage/types";
 
 export class AppError extends Error {
@@ -28,6 +29,7 @@ export interface SessionPort {
   log(sessionId: string, action: NewAction): Promise<LoggedAction>;
   list(sessionId: string): Promise<LoggedAction[]>;
   close(sessionId: string): Promise<void>;
+  touch(sessionId: string, at: string): Promise<void>;
 }
 
 export function sessionPortFromBook(book: SessionBook): SessionPort {
@@ -37,6 +39,7 @@ export function sessionPortFromBook(book: SessionBook): SessionPort {
     log: async (sessionId, action) => book.log(sessionId, action),
     list: async (sessionId) => book.list(sessionId),
     close: async (sessionId) => book.close(sessionId),
+    touch: async (sessionId, at) => book.touch(sessionId, at),
   };
 }
 
@@ -66,25 +69,23 @@ export interface StartResult {
   warnings: string[];
 }
 
-const STALE_SESSION_MS = 30 * 60 * 1000;
+export const DEFAULT_IDLE_MINUTES = 20;
 
 export async function startSession(deps: AppDeps, input: { repos?: string[]; timeZone?: string }): Promise<StartResult> {
   const requested = namedRepos(input.repos);
   const timeZone = await resolveZone(deps, input.timeZone);
   const open = await deps.sessions.getOpen();
-  if (open && sameRepos(open.repos, requested)) {
-    const age = deps.now.getTime() - Date.parse(open.startedAt);
-    if (Number.isFinite(age) && age < STALE_SESSION_MS) {
-      return {
-        sessionId: open.id,
-        snapshotId: open.snapshotId,
-        takenAt: open.startedAt,
-        repos: open.repos,
-        warnings: open.warnings,
-      };
-    }
+  if (open && sameRepos(open.repos, requested) && !(await sessionIsIdle(deps, open))) {
+    await deps.sessions.touch(open.id, deps.now.toISOString());
+    return {
+      sessionId: open.id,
+      snapshotId: open.snapshotId,
+      takenAt: open.startedAt,
+      repos: open.repos,
+      warnings: open.warnings,
+    };
   }
-  if (open) await endSession(deps, { sessionId: open.id, allowGitHubFailure: true });
+  if (open) await releaseOpen(deps, open, deps.github);
   if (requested.length === 0) {
     const session = await startActionSession(deps, timeZone);
     return { sessionId: session.id, snapshotId: session.snapshotId, takenAt: session.startedAt, repos: [], warnings: [] };
@@ -182,7 +183,7 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
   const jsonKey = `receipts/${deps.userId}/${receiptId}.json`;
   const htmlKey = `receipts/${deps.userId}/${receiptId}.html`;
   try {
-    const png = await renderCardPng(condenseLines(storyFromReceipt(receipt), { detail: false }), "Life Diff");
+    const png = await renderCardPng(condenseLines(storyFromReceipt(receipt), { detail: false }), "Life Diff", "This session");
     receipt.cardToken = randomToken();
     await deps.objects.putBytes(receiptCardKey(jsonKey), png, "image/png");
   } catch {
@@ -218,14 +219,66 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
 
 export async function ensureSession(deps: CoreDeps): Promise<OpenSession> {
   const open = await deps.sessions.getOpen();
-  if (open) return open;
+  if (open && !(await sessionIsIdle(deps, open))) return open;
+  if (open) await releaseOpen(deps, open);
   try {
     return await startActionSession(deps);
   } catch (error) {
     const again = await deps.sessions.getOpen();
-    if (again) return again;
-    throw error;
+    if (again && !(await sessionIsIdle(deps, again))) return again;
+    if (again) {
+      try { await deps.sessions.close(again.id); } catch { /* already closed */ }
+    }
+    return startActionSession(deps);
   }
+}
+
+export async function closeIdleSession(deps: CoreDeps, github?: GitHubApi): Promise<void> {
+  const open = await deps.sessions.getOpen();
+  if (!open || !(await sessionIsIdle(deps, open))) return;
+  await releaseOpen(deps, open, github);
+}
+
+async function sessionIsIdle(deps: CoreDeps, open: OpenSession): Promise<boolean> {
+  const settings = await deps.meta.getSettings(deps.userId);
+  const minutes = clampIdle(settings.idleMinutes);
+  const activity = Date.parse(open.activityAt || open.startedAt);
+  if (!Number.isFinite(activity)) return false;
+  return deps.now.getTime() - activity >= minutes * 60 * 1000;
+}
+
+function clampIdle(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_IDLE_MINUTES;
+  return Math.min(180, Math.max(5, Math.round(value)));
+}
+
+async function releaseOpen(deps: CoreDeps, open: OpenSession, github?: GitHubApi): Promise<void> {
+  try {
+    await endSession({ ...deps, github: github ?? deniedGithub() }, { sessionId: open.id, allowGitHubFailure: true });
+  } catch {
+    try { await deps.sessions.close(open.id); } catch { /* a stale session must not block the next start */ }
+  }
+  const still = await deps.sessions.getOpen();
+  if (still?.id === open.id) {
+    try { await deps.sessions.close(still.id); } catch { /* already closed */ }
+  }
+}
+
+function deniedGithub(): GitHubApi {
+  const fail = async (): Promise<never> => {
+    throw new Error("GitHub was not read while closing an idle session.");
+  };
+  return {
+    listInstallations: fail,
+    listInstallationRepos: fail,
+    listBranches: fail,
+    listPulls: fail,
+    listIssues: fail,
+    listCommits: fail,
+    compare: fail,
+    listIssueComments: fail,
+    listReviewComments: fail,
+  };
 }
 
 async function startActionSession(deps: CoreDeps, timeZone?: string): Promise<OpenSession> {
@@ -359,6 +412,7 @@ export async function recordProxyCall(deps: CoreDeps, input: {
   durationMs: number;
   result?: string;
   error?: string;
+  client?: string;
 }): Promise<LoggedAction> {
   const open = await ensureSession(deps);
   return deps.sessions.log(open.id, {
@@ -378,6 +432,7 @@ export async function recordProxyCall(deps: CoreDeps, input: {
     ...(input.classification.verb ? { verb: input.classification.verb } : {}),
     ...(input.result ? { result: input.result.slice(0, 500) } : {}),
     ...(input.error ? { error: input.error.slice(0, 500) } : {}),
+    ...(input.client ? { client: input.client.slice(0, 80) } : {}),
   });
 }
 
@@ -388,7 +443,7 @@ function recordedActions(actions: LoggedAction[]): RecordedAction[] {
   });
 }
 
-export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId?: string }): Promise<LoggedAction> {
+export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId?: string; client?: string }): Promise<LoggedAction> {
   const open = await deps.sessions.getOpen();
   if (!open || (input.sessionId && input.sessionId !== open.id)) throw new AppError("There is no open session to log against. Call start_session first.");
   let normalized;
@@ -397,13 +452,34 @@ export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId
   } catch (error) {
     throw new AppError(error instanceof Error ? error.message : "Invalid action");
   }
+  const tool = input.tool.trim();
+  const target = input.target.trim();
+  const read = normalized.action === "read";
   return deps.sessions.log(open.id, {
     id: newId("act", deps.now),
     loggedAt: deps.now.toISOString(),
-    tool: input.tool.trim(),
-    target: input.target.trim(),
+    tool,
+    target,
     ...normalized,
     ...(input.detail?.trim() ? { detail: input.detail.trim() } : {}),
+    ...(input.client?.trim() ? { client: input.client.trim().slice(0, 80) } : {}),
+    ...(read ? {
+      source: "claim" as const,
+      upstream: tool,
+      effect: "read" as const,
+      tone: "read" as const,
+      verb: "read",
+      ok: true,
+      status: "ok",
+      arguments: { subject: target },
+      summary: phraseAction({
+        upstream: tool,
+        tool: "read",
+        classification: { effect: "read", tone: "read", verb: "read" },
+        subject: target,
+        ok: true,
+      }),
+    } : {}),
   });
 }
 

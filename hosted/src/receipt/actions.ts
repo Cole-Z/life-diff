@@ -5,13 +5,14 @@ const EFFECTS = new Set<ActionEffect>(["read", "write", "unknown"]);
 const TONES = new Set<ActionTone>(["created", "changed", "removed", "read", "unknown"]);
 
 export function recordedFrom(action: LoggedAction): RecordedAction | null {
-  if (action.source !== "proxy") return null;
-  const effect = action.effect && EFFECTS.has(action.effect) ? action.effect : "unknown";
-  const tone = action.tone && TONES.has(action.tone) ? action.tone : "unknown";
+  const loggedRead = action.action === "read";
+  if (action.source !== "proxy" && !loggedRead) return null;
+  const effect = loggedRead ? "read" : action.effect && EFFECTS.has(action.effect) ? action.effect : "unknown";
+  const tone = loggedRead ? "read" : action.tone && TONES.has(action.tone) ? action.tone : "unknown";
   return {
     id: action.id,
     time: action.loggedAt,
-    upstream: action.upstream || "unknown",
+    upstream: action.upstream || (loggedRead ? action.tool : "unknown"),
     tool: action.tool,
     summary: action.summary || action.target,
     tone,
@@ -23,6 +24,7 @@ export function recordedFrom(action: LoggedAction): RecordedAction | null {
     ...(action.error ? { error: action.error } : {}),
     ...(typeof action.durationMs === "number" ? { durationMs: action.durationMs } : {}),
     ...(action.arguments !== undefined ? { arguments: action.arguments } : {}),
+    ...(action.client ? { client: action.client } : {}),
     source: "proxy",
   };
 }

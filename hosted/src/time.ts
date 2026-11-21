@@ -11,12 +11,20 @@ export interface UserSettings {
   timeZone: string;
   dayEnd: string;
   githubDaily: boolean;
+  /** Minutes of quiet before an open session is closed into a receipt. */
+  idleMinutes: number;
+  /** When set, a day that is only lookups is not stored. */
+  quietDays: boolean;
+  /** Updated when the daily diff is opened. `since=last_viewed` starts here. */
+  lastViewedAt?: string;
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
   timeZone: DEFAULT_TIME_ZONE,
   dayEnd: DEFAULT_DAY_END,
   githubDaily: false,
+  idleMinutes: 20,
+  quietDays: false,
 };
 
 export function parseDayEnd(value: string): { hour: number; minute: number } | null {

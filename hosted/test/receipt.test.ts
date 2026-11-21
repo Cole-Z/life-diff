@@ -295,7 +295,7 @@ describe("claims and receipt", () => {
     expect(html).toContain(">Added<");
     expect(html).toContain(">Removed<");
     expect(html).toContain(">Modified<");
-    expect(html).toContain("Open on GitHub");
+    expect(html).toContain(">Open</a>");
     expect(html).toContain("Life Diff did not change any GitHub data.");
     expect(html).not.toContain("<script");
   });

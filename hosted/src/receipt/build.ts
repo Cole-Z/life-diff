@@ -107,7 +107,7 @@ export function buildActionReceipt(input: {
     claims: [],
     actions: input.actions,
     notes: [
-      "This receipt lists tool calls Life Diff forwarded. Each one is marked reported by the proxy.",
+      "This receipt lists tool calls Life Diff forwarded. Each one is marked reported by the agent.",
       "A proxied call is not proof the service changed. Verified lines come from a service that exposes history, such as GitHub.",
       "Life Diff did not run a GitHub snapshot for this session, so there is no verified GitHub diff.",
       `Times are shown in ${input.timeZone}.`,

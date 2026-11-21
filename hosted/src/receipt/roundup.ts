@@ -45,42 +45,47 @@ interface StoredDay {
 
 export async function buildRoundup(deps: CoreDeps & { issuer: string }, input: {
   date?: string;
+  since?: string;
   detail?: boolean;
   save: boolean;
   finalize?: boolean;
   seal?: () => Promise<void>;
+  markViewed?: boolean;
 }): Promise<Roundup> {
   if (input.seal) await input.seal();
   const settings = await deps.meta.getSettings(deps.userId);
   const today = localClock(deps.now, settings.timeZone).date;
   const day = resolveDay(input.date, today);
   const window = dayWindow(day, settings.timeZone);
-  const lines = await collectLines(deps, settings, window, input.detail === true);
+  const after = resolveAfter(input.since, settings.lastViewedAt);
+  const lines = await collectLines(deps, settings, window, input.detail === true, after);
   const existing = await deps.meta.getDaily(deps.userId, day);
   const previous = await loadStored(deps, day);
-  const token = input.save ? (previous?.cardToken ?? randomHex()) : previous?.cardToken;
+  const onlyLookups = lines.every((line) => line.tone === "read" || line.tone === "note" || line.tone === "unknown");
+  const skipStore = settings.quietDays && onlyLookups;
+  const token = input.save && !skipStore ? (previous?.cardToken ?? randomHex()) : previous?.cardToken;
   const origin = deps.issuer.replace(/\/$/, "");
   const page = `${origin}/roundup/${day}`;
   const imageUrl = token ? `${origin}/roundup/card.png?t=${token}` : undefined;
   const label = day === today ? "Today" : day;
+  const headline = headlineFor(lines, label);
   const markdown = renderStory({
-    headline: headlineFor(lines, label),
+    headline,
     lines,
     link: page,
     linkLabel: "Full day",
-    ...(imageUrl ? { imageUrl } : {}),
   });
   const html = renderDiffPage({
     title: `Life Diff ${day}`,
     lede: "What your agents changed.",
-    headline: headlineFor(lines, label),
+    headline,
     when: `${day} · ${settings.timeZone} · day ends ${settings.dayEnd}`,
     lines,
-    footer: "Life Diff records tool calls routed through it. GitHub history is included only when you turn it on and name the repositories.",
+    footer: "Life Diff records tool calls routed through it. GitHub is the sign-in, plus an optional check when you turn it on and name the repositories.",
   });
-  const png = await renderCardPng(lines, "Life Diff");
+  const png = await renderCardPng(lines, "Life Diff", label);
   const finalizedAt = input.finalize ? (existing?.finalizedAt ?? deps.now.toISOString()) : existing?.finalizedAt;
-  if (input.save && token) {
+  if (input.save && token && !skipStore) {
     const cardKey = roundupCardKey(token);
     if (existing?.cardKey && existing.cardKey !== cardKey) await deps.objects.delete([existing.cardKey]);
     await deps.objects.putBytes(cardKey, png, "image/png");
@@ -106,6 +111,9 @@ export async function buildRoundup(deps: CoreDeps & { issuer: string }, input: {
       updatedAt: deps.now.toISOString(),
       ...(finalizedAt ? { finalizedAt } : {}),
     });
+  }
+  if (input.markViewed) {
+    await deps.meta.saveSettings(deps.userId, { ...settings, lastViewedAt: deps.now.toISOString() }, deps.now.toISOString());
   }
   return {
     day,
@@ -155,9 +163,8 @@ export async function receiptPresentation(deps: CoreDeps, receipt: Receipt, link
     lines,
     link,
     linkLabel: "Full receipt",
-    ...(imageUrl ? { imageUrl } : {}),
   });
-  const png = await renderCardPng(lines, "Life Diff");
+  const png = await renderCardPng(lines, "Life Diff", "This session");
   return { markdown, png, ...(imageUrl ? { imageUrl } : {}) };
 }
 
@@ -166,7 +173,7 @@ export function pngContent(png: Uint8Array): { type: "image"; data: string; mime
   return { type: "image", data: bytesToBase64(png), mimeType: "image/png" };
 }
 
-async function collectLines(deps: CoreDeps, settings: UserSettings, window: { start: string; end: string }, detail: boolean): Promise<StoryLine[]> {
+async function collectLines(deps: CoreDeps, settings: UserSettings, window: { start: string; end: string }, detail: boolean, after?: string): Promise<StoryLine[]> {
   const through = deps.now.toISOString() < window.end ? new Date(deps.now.getTime() + 1000).toISOString() : window.end;
   const receipts = await deps.meta.listReceiptsBetween(deps.userId, window.start, through, 200);
   const raw: StoryLine[] = [];
@@ -179,11 +186,14 @@ async function collectLines(deps: CoreDeps, settings: UserSettings, window: { st
     } catch {
       continue;
     }
-    const actions = (receipt.actions ?? []).filter((action) => action.time >= window.start && action.time < window.end);
+    const actions = (receipt.actions ?? []).filter((action) => action.time >= window.start && action.time < window.end && (!after || action.time >= after));
     raw.push(...storyFromActions(actions));
     const stamped = receipt.generatedAt >= window.start && receipt.generatedAt < window.end;
     if (stamped && settings.githubDaily && receipt.github?.optIn === true) {
-      raw.push(...storyFromChanges(receipt.id, receipt.changes));
+      const changes = after
+        ? receipt.changes.filter((change) => !change.occurredAt || change.occurredAt >= after)
+        : receipt.changes;
+      raw.push(...storyFromChanges(receipt.id, changes));
     }
   }
   const open = await deps.sessions.getOpen();
@@ -191,11 +201,20 @@ async function collectLines(deps: CoreDeps, settings: UserSettings, window: { st
     const logged = await deps.sessions.list(open.id);
     for (const action of logged) {
       if (action.loggedAt < window.start || action.loggedAt >= window.end) continue;
+      if (after && action.loggedAt < after) continue;
       const recorded = recordedFrom(action);
       if (recorded) raw.push(...storyFromActions([recorded]));
     }
   }
   return condenseLines(raw, { detail });
+}
+
+function resolveAfter(since: string | undefined, lastViewedAt: string | undefined): string | undefined {
+  if (!since?.trim()) return undefined;
+  if (since.trim() === "last_viewed") return lastViewedAt;
+  const parsed = Date.parse(since);
+  if (Number.isNaN(parsed)) throw new Error("since must be last_viewed or an ISO time.");
+  return new Date(parsed).toISOString();
 }
 
 function resolveDay(requested: string | undefined, today: string): string {

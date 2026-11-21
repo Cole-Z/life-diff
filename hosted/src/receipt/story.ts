@@ -1,8 +1,10 @@
-import { undoHint } from "./undo";
 import { assertNever } from "../text";
+import { displayName } from "./names";
+import { presentAction } from "./present";
+import { reversalForChange } from "./undo";
 import type { Change, Receipt, RecordedAction } from "./types";
 
-export type StoryTone = "created" | "changed" | "removed" | "read" | "failed" | "unknown";
+export type StoryTone = "created" | "changed" | "removed" | "read" | "failed" | "unknown" | "note";
 
 export interface StoryDetail {
   text: string;
@@ -25,15 +27,32 @@ export interface StoryLine {
   callKey?: string;
   ok?: boolean;
   readCount?: number;
+  repo?: string;
+  client?: string;
+  trust?: string;
+  hint?: string;
 }
 
 const MAX_CHAT_LINES = 10;
 
 export function storyFromReceipt(receipt: Receipt): StoryLine[] {
-  return [
-    ...storyFromActions(receipt.actions ?? []),
+  const actions = receipt.actions ?? [];
+  const lines = [
+    ...storyFromActions(actions),
     ...storyFromChanges(receipt.id, receipt.changes),
+    ...mismatchLines(actions, receipt.changes),
   ];
+  if (receipt.github.repos.length === 0 && receipt.github.optIn !== true) {
+    lines.push({
+      service: "GitHub",
+      source: "verified",
+      write: false,
+      tone: "note",
+      summary: "GitHub not checked this session",
+      seed: `${receipt.id}:github-off`,
+    });
+  }
+  return lines;
 }
 
 export function storyFromActions(actions: RecordedAction[]): StoryLine[] {
@@ -59,17 +78,19 @@ export function condenseLines(lines: StoryLine[], input: { detail: boolean }): S
   }
   const folded: StoryLine[] = [...rest];
   for (const [service, items] of reads) {
-    const label = serviceLabel(service);
-    const noun = items.length === 1 ? "read" : "reads";
+    const noun = items.length === 1 ? "lookup" : "lookups";
+    const clients = new Set(items.map((item) => item.client).filter((client): client is string => Boolean(client)));
     folded.push({
       service,
       source: "proxy",
       write: false,
       tone: "read",
-      summary: `${items.length} ${noun} across ${label}`,
+      summary: `${items.length} ${noun}`,
       seed: `reads:${service}:${items.map((item) => item.seed).join(",")}`,
       readCount: items.length,
+      trust: "Reported by the agent",
       details: items.map((item) => ({ text: item.summary })),
+      ...(clients.size === 1 ? { client: [...clients][0] } : {}),
     });
   }
   return assignIds(orderLines(folded));
@@ -84,32 +105,52 @@ export function renderStory(input: {
   maxLines?: number;
 }): string {
   const max = input.maxLines ?? MAX_CHAT_LINES;
-  const shown = input.lines.slice(0, max);
+  const notes = input.lines.filter((line) => line.tone === "note");
+  const body = input.lines.filter((line) => line.tone !== "note").slice(0, max);
+  const clients = new Set(body.map((line) => line.client).filter((client): client is string => Boolean(client)));
+  const showClient = clients.size > 1;
   const parts = [input.headline, ""];
   let lastService = "";
-  for (const line of shown) {
+  let lastRepo = "";
+  for (const line of body) {
     if (line.service !== lastService) {
       if (lastService) parts.push("");
-      parts.push(serviceLabel(line.service));
+      parts.push(`**${serviceLabel(line.service)}**`);
       lastService = line.service;
+      lastRepo = "";
     }
-    const undo = line.undo ? ` · ${line.undo}${line.id ? ` \`${line.id}\`` : ""}` : "";
-    parts.push(`${markerFor(line.tone)} ${line.summary}${undo}`);
+    const repo = line.repo ?? "";
+    if (repo !== lastRepo) {
+      lastRepo = repo;
+      if (repo) {
+        const group = body.filter((item) => item.service === line.service && item.repo === repo);
+        parts.push(repoHeading(repo, group, showClient));
+      }
+    }
+    parts.push(formatLine(line, showClient && !line.repo));
+  }
+  for (const note of notes) {
+    parts.push("", note.summary.endsWith(".") ? note.summary : `${note.summary}.`);
   }
   parts.push("", `${input.linkLabel}: ${input.link}`);
-  if (input.imageUrl) parts.push("", `Card: ${input.imageUrl}`);
   return parts.join("\n");
 }
 
 export function headlineFor(lines: StoryLine[], label: string): string {
   const counts = countStory(lines);
-  const parts: string[] = [];
-  if (counts.added) parts.push(`${counts.added} created`);
-  if (counts.modified) parts.push(`${counts.modified} changed`);
-  if (counts.removed) parts.push(`${counts.removed} deleted`);
-  if (counts.failed) parts.push(`${counts.failed} failed`);
-  if (counts.reads) parts.push(`${counts.reads} ${counts.reads === 1 ? "read" : "reads"}`);
-  return `${label}: ${parts.length > 0 ? parts.join(" · ") : "nothing changed"}`;
+  const writes = counts.added + counts.modified + counts.removed;
+  const session = label === "This session";
+  if (writes === 0 && counts.failed === 0) {
+    if (counts.reads === 0) return session ? "Read-only session" : "Nothing changed";
+    if (session) return "Read-only session";
+    const noun = counts.reads === 1 ? "lookup" : "lookups";
+    return `Nothing changed · ${counts.reads} ${noun}`;
+  }
+  if (writes === 0) return counts.failed === 1 ? "1 action failed" : `${counts.failed} actions failed`;
+  const things = writes === 1 ? "1 thing changed" : `${writes} things changed`;
+  if (counts.failed === 0) return things;
+  const look = counts.failed === 1 ? "1 needs a look" : `${counts.failed} need a look`;
+  return `${things}, ${look}`;
 }
 
 export function countStory(lines: StoryLine[]): { added: number; removed: number; modified: number; reads: number; failed: number } {
@@ -132,6 +173,7 @@ export function countStory(lines: StoryLine[]): { added: number; removed: number
         counts.reads += line.readCount ?? 1;
         break;
       case "unknown":
+      case "note":
         break;
       default:
         assertNever(line.tone, "story tone");
@@ -153,15 +195,17 @@ export function markerFor(tone: StoryTone): string {
     case "read":
     case "unknown":
       return "⚪";
+    case "note":
+      return "";
     default:
       return assertNever(tone, "story tone");
   }
 }
 
 export function cardRows(lines: StoryLine[]): { color: string; text: string }[] {
-  return lines.slice(0, 12).map((line) => ({
+  return lines.filter((line) => line.tone !== "note").slice(0, 8).map((line) => ({
     color: colorFor(line.tone),
-    text: line.summary.slice(0, 90),
+    text: line.summary,
   }));
 }
 
@@ -174,21 +218,22 @@ export function assignIds(lines: StoryLine[]): StoryLine[] {
 }
 
 function actionLine(action: RecordedAction): StoryLine {
-  const failed = action.ok === false;
-  const write = !failed && (action.effect === "write" || action.tone === "created" || action.tone === "changed" || action.tone === "removed");
-  const tone: StoryTone = failed ? "failed" : action.tone;
-  const undo = failed ? undefined : undoHint(action);
+  const presented = presentAction(action);
   return {
     service: action.upstream || "unknown",
     source: "proxy",
-    write,
-    tone,
-    summary: action.summary,
+    write: presented.write,
+    tone: presented.tone,
+    summary: presented.summary,
     seed: action.id,
     time: action.time,
     callKey: `${action.upstream}\0${action.tool}\0${stable(action.arguments)}`,
     ok: action.ok,
-    ...(undo ? { undo } : {}),
+    trust: "Reported by the agent",
+    ...(presented.repo ? { repo: presented.repo } : {}),
+    ...(presented.link ? { link: presented.link } : {}),
+    ...(presented.hint ? { hint: presented.hint, undo: presented.hint } : {}),
+    ...(presented.client ? { client: presented.client } : {}),
   };
 }
 
@@ -228,6 +273,8 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
         tone: fileTone(files),
         summary: `Changed ${stat.count} files on ${repo} · ${statText(stat)}`,
         seed: `${receiptId}:files:${repo}`,
+        repo,
+        trust: "Confirmed by GitHub",
         details: files.map(fileDetail),
         link: files.find((file) => file.link)?.link,
       });
@@ -248,6 +295,8 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
         tone: "created",
         summary: `${comments.length} comments on ${repo}`,
         seed: `${receiptId}:comments:${repo}`,
+        repo,
+        trust: "Confirmed by GitHub",
         details: comments.map((comment) => ({ text: comment.summary })),
         link: comments.find((comment) => comment.link)?.link,
       });
@@ -257,6 +306,7 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
 }
 
 function changeLine(receiptId: string, change: Change, summary: string, details: StoryDetail[]): StoryLine {
+  const hint = reversalForChange(change);
   return {
     service: "GitHub",
     source: "verified",
@@ -265,8 +315,11 @@ function changeLine(receiptId: string, change: Change, summary: string, details:
     summary,
     seed: `${receiptId}:${change.id}`,
     time: change.occurredAt,
+    repo: change.repo,
+    trust: "Confirmed by GitHub",
     ...(details.length > 0 ? { details } : {}),
     ...(change.link ? { link: change.link } : {}),
+    ...(hint ? { hint, undo: hint } : {}),
   };
 }
 
@@ -414,15 +467,83 @@ function toneRank(tone: StoryTone): number {
       return 4;
     case "read":
       return 5;
+    case "note":
+      return 6;
     default:
       return assertNever(tone, "story tone");
   }
 }
 
 export function serviceLabel(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) return "Service";
-  return trimmed.split(/[_-]+/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+  return displayName(name);
+}
+
+function formatLine(line: StoryLine, showClient: boolean): string {
+  const mark = markerFor(line.tone);
+  const prefix = mark ? `${mark} ` : "";
+  const link = line.link ? ` · [Open](${line.link})` : "";
+  const trust = line.trust ? ` · ${line.trust}` : "";
+  const hint = line.hint ? ` · ${line.hint}` : "";
+  const by = showClient && line.client ? ` · ${line.client}` : "";
+  return `${prefix}${line.summary}${link}${trust}${hint}${by}`;
+}
+
+function repoHeading(repo: string, lines: StoryLine[], showClient: boolean): string {
+  const clients = new Set(lines.map((line) => line.client).filter((client): client is string => Boolean(client)));
+  const client = clients.size === 1 ? [...clients][0] : undefined;
+  const writes = lines.filter((line) => line.write && line.tone !== "failed" && line.tone !== "read");
+  if (showClient && client && writes.length === 1) {
+    const summary = writes[0]?.summary ?? "";
+    const kind = summary.includes("pull request") ? "pull request opened" : summary.includes("issue") ? "issue" : "change";
+    return `${repo}: 1 ${kind} by ${client}`;
+  }
+  if (showClient && client) return `${repo} · ${client}`;
+  return repo;
+}
+
+function mismatchLines(actions: RecordedAction[], changes: Change[]): StoryLine[] {
+  const lines: StoryLine[] = [];
+  for (const action of actions) {
+    if (action.ok === false) continue;
+    const number = closedNumber(action);
+    if (!number) continue;
+    const related = changes.filter((change) => numberOf(change) === number && (change.resourceType === "issue" || change.resourceType === "pull_request"));
+    const stillOpen = related.some((change) => statusAfter(change) === "open");
+    const closed = related.some((change) => {
+      const status = statusAfter(change);
+      return status === "closed" || status === "merged" || change.summary.startsWith("Closed ") || change.summary.startsWith("Merged ");
+    });
+    if (!stillOpen || closed) continue;
+    const repo = related[0]?.repo;
+    lines.push({
+      service: "GitHub",
+      source: "proxy",
+      write: true,
+      tone: "failed",
+      summary: `Agent said it closed #${number}, but GitHub shows it still open.`,
+      seed: `mismatch:${action.id}`,
+      time: action.time,
+      ...(repo ? { repo } : {}),
+    });
+  }
+  return lines;
+}
+
+function closedNumber(action: RecordedAction): string | undefined {
+  if (!action.tool.toLowerCase().includes("close")) return undefined;
+  const record = action.arguments && typeof action.arguments === "object" && !Array.isArray(action.arguments)
+    ? action.arguments as Record<string, unknown>
+    : undefined;
+  for (const key of ["number", "issue_number", "issueNumber"]) {
+    const value = record?.[key];
+    if (typeof value === "number" && Number.isInteger(value)) return String(value);
+    if (typeof value === "string" && /^\d+$/.test(value)) return value;
+  }
+  return /#(\d+)/.exec(action.summary)?.[1];
+}
+
+function statusAfter(change: Change): string | undefined {
+  return change.fields.find((field) => field.field === "status")?.after;
 }
 
 function stable(value: unknown): string {
@@ -473,9 +594,10 @@ function colorFor(tone: StoryTone): string {
     case "removed":
       return "#8d1c1c";
     case "failed":
-      return "#8a4b08";
+      return "#8d1c1c";
     case "read":
     case "unknown":
+    case "note":
       return "#5c564c";
     default:
       return assertNever(tone, "story tone");

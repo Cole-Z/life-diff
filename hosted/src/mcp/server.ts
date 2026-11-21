@@ -2,8 +2,10 @@ import { HOSTED_VERSION, SCOPES } from "../constants";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { appDeps, coreDeps, sessionStub } from "../app/runtime";
+import { ACTION_VALUES } from "../actions/log";
 import { clearHistory, endSession, getReceipt, listReceipts, logAction, sealOpenSession, startSession, AppError } from "../app/service";
 import type { Env } from "../env";
+import { clientName } from "./client-name";
 import { invalidateUpstreamCache, registerUpstreamTools } from "./upstream-tools";
 import { addUpstream, listPublicUpstreams, removeUpstream } from "../proxy/upstreams";
 import { D1MetadataStore } from "../storage/d1";
@@ -23,7 +25,7 @@ const claimSchema = z.object({
 
 const INSTRUCTIONS = [
   "Life Diff is a daily diff of what your AI agents changed across the tools you use. It is not a GitHub diff. GitHub is only how the user signs in.",
-  "Route the user's other tool calls through this server. After an upstream is added, its tools are named <upstream>__<tool>. Call end_session when a piece of work is finished.",
+  "Route the user's other tool calls through this server. After an upstream is added, its tools are named <upstream>__<tool>. A session starts on the first call if none is open. Call end_session before your final reply to the user so they get the receipt. An idle session closes itself after the quiet period (20 minutes unless the user changed it).",
   "Call get_daily_diff at the end of the day (get_roundup is the same tool) and show that markdown to the user. The day follows the user's time zone.",
   "Pass repos to start_session only for repositories the user explicitly named. Do not treat a missing list item as a deletion. A failed call is a failure, not a read.",
 ].join(" ");
@@ -31,6 +33,7 @@ const INSTRUCTIONS = [
 const dailySchema = z.object({
   date: z.string().optional(),
   detail: z.boolean().optional(),
+  since: z.string().optional(),
 });
 
 export async function createLifeDiffServer(env: Env): Promise<McpServer> {
@@ -38,7 +41,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "start_session",
     {
-      description: "Open a Life Diff session. Pass repos only for GitHub repositories the user explicitly asked to include. With no repos, Life Diff records tool calls and does not read GitHub.",
+      description: "Open a Life Diff session. A session also starts on the first proxied call, and an idle one closes itself. Pass repos only for GitHub repositories the user explicitly asked to include. With no repos, Life Diff records tool calls and does not read GitHub.",
       inputSchema: z.object({
         repos: z.array(z.string()).max(25).optional(),
         timeZone: z.string().optional(),
@@ -55,26 +58,26 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "log_action",
     {
-      description: "Record a claim in the agent's own words. Life Diff does not run the tool. On a session that named GitHub repositories, the claim is checked against that history.",
+      description: "Record a claim in the agent's own words. action is one of added, removed, modified, or read. read is counted with the lookups and is not checked against GitHub. added, removed, and modified are checked against GitHub when the session named repositories. Life Diff does not run the tool.",
       inputSchema: z.object({
         sessionId: z.string().optional(),
         tool: z.string(),
-        action: z.string().optional(),
+        action: z.enum(ACTION_VALUES).optional(),
         target: z.string(),
         detail: z.string().optional(),
         resource: z.string().optional(),
         repo: z.string().optional(),
       }),
     },
-    async (input) => run(async () => {
-      const logged = await logAction(coreDeps(env, user()), input);
-      return text(`Logged ${logged.tool} against ${logged.target}.`, logged);
+    async (input, ctx) => run(async () => {
+      const logged = await logAction(coreDeps(env, user()), { ...input, ...(clientName(server, ctx) ? { client: clientName(server, ctx) } : {}) });
+      return text("Logged.", logged);
     }),
   );
   server.registerTool(
     "end_session",
     {
-      description: "Close the open session and return a short receipt. Call this when the work is finished. Show the markdown to the user.",
+      description: "Close the open session and return a short receipt. Call this before your final reply to the user, and show the markdown.",
       inputSchema: z.object({
         sessionId: z.string().optional(),
         timeZone: z.string().optional(),
@@ -138,7 +141,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "get_daily_diff",
     {
-      description: "Today's diff across every session and agent: what was created, changed, deleted, or only read. Defaults to the user's local day. Pass date (YYYY-MM-DD) for another day, or detail true to list each read. Show the markdown to the user.",
+      description: "Today's diff across every session and agent: what changed, what failed, and how many lookups. Defaults to the user's local day. Pass date (YYYY-MM-DD) for another day, since last_viewed for lines since the last time this was opened, or detail true to list each lookup. Show the markdown to the user.",
       inputSchema: dailySchema,
     },
     daily,
@@ -228,13 +231,20 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
 }
 
 function dailyHandler(env: Env) {
-  return async (input: { date?: string; detail?: boolean }) => run(async () => {
+  return async (input: { date?: string; detail?: boolean; since?: string }) => run(async () => {
     const who = user();
     const now = new Date();
     const deps = await depsForDaily(env, who, now);
     const roundup = await buildRoundup(
       { ...deps, issuer: env.ISSUER },
-      { save: true, seal: () => sealOpenSession(deps), ...(input.date ? { date: input.date } : {}), ...(input.detail ? { detail: true } : {}) },
+      {
+        save: true,
+        markViewed: true,
+        seal: () => sealOpenSession(deps),
+        ...(input.date ? { date: input.date } : {}),
+        ...(input.detail ? { detail: true } : {}),
+        ...(input.since ? { since: input.since } : {}),
+      },
     );
     const origin = env.ISSUER.replace(/\/$/, "");
     return shownContent(roundup.markdown, roundup.png, {

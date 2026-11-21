@@ -3,7 +3,7 @@ import { endSession, recordProxyCall, sessionPortFromBook, startSession } from "
 import { renderCardPng } from "../src/receipt/card";
 import { buildRoundup } from "../src/receipt/roundup";
 import { condenseLines, headlineFor, renderStory, storyFromReceipt } from "../src/receipt/story";
-import { undoHint } from "../src/receipt/undo";
+import { reversalHint } from "../src/receipt/undo";
 import { SessionBook } from "../src/session/book";
 import { MemoryMetadataStore, MemoryObjectStore } from "../src/storage/memory";
 import type { GitHubApi } from "../src/github/types";
@@ -13,37 +13,30 @@ const now = new Date("2026-04-02T15:00:00.000Z");
 
 describe("undo hints", () => {
   it("turns a create into a delete, and refuses to undo a send", () => {
-    const created = undoHint({
+    const created = reversalHint({
       tool: "create_event",
       upstream: "google_calendar",
       verb: "create",
       tone: "created",
       effect: "write",
-      summary: "Added “Standup” in Google calendar.",
-      arguments: { title: "Standup" },
-      result: '{"id":"evt_1"}',
     });
-    expect(created).toBe('Undo: delete "Standup" (evt_1) via google_calendar__delete_event.');
-    const sent = undoHint({
+    expect(created).toBe("Delete this event");
+    const sent = reversalHint({
       tool: "send_message",
       upstream: "slack",
       verb: "send",
       tone: "removed",
       effect: "write",
-      summary: "Sent “hi” from Slack.",
-      arguments: { text: "hi", url: "https://slack.example/archives/C1" },
     });
     expect(sent).toBeUndefined();
-    const updated = undoHint({
+    const updated = reversalHint({
       tool: "update_event",
       upstream: "google_calendar",
       verb: "update",
       tone: "changed",
       effect: "write",
-      summary: "Changed “Standup” in Google calendar.",
-      arguments: { title: "Standup", previous: { title: "Daily" } },
     });
-    expect(updated).toBe("Undo: restore title “Daily” via google_calendar__update_event.");
+    expect(updated).toBeUndefined();
   });
 });
 
@@ -103,13 +96,17 @@ describe("inline receipt", () => {
     });
     expect(markdown).toContain("🔴");
     expect(markdown).toContain("⚪");
-    expect(markdown).toContain("1 read across Deepwiki");
+    expect(markdown).toContain("**DeepWiki**");
+    expect(markdown).toContain("1 lookup");
+    expect(markdown).toContain("Reported by the agent");
+    expect(markdown).toContain("Confirmed by GitHub");
+    expect(markdown).toContain("Reopen");
     expect(markdown).not.toContain("```diff");
-    expect(markdown).not.toContain("cannot auto-undo");
-    expect(markdown).not.toMatch(/`[a-z0-9]{2}`/);
+    expect(markdown).not.toContain("card.png");
+    expect(markdown).not.toContain("read_wiki");
     expect(markdown).toContain("Full receipt: https://lifediff.dev/receipts/rcpt_test");
-    expect(markdown.trim().endsWith("https://lifediff.dev/receipts/rcpt_test/card.png?t=ab")).toBe(true);
-    const png = await renderCardPng(lines, "Life Diff");
+    expect(markdown.trim().endsWith("https://lifediff.dev/receipts/rcpt_test")).toBe(true);
+    const png = await renderCardPng(lines, "Life Diff", "This session");
     expect(png[0]).toBe(137);
     expect(png[1]).toBe(80);
     expect(png[2]).toBe(78);
@@ -154,9 +151,11 @@ describe("roundup", () => {
     await endSession({ ...deps, now: new Date("2026-04-02T16:00:00.000Z") }, {});
     const first = await buildRoundup({ ...deps, now: new Date("2026-04-02T16:05:00.000Z") }, { save: true });
     expect(first.markdown).toContain("🟢");
-    expect(first.markdown).toContain("google_calendar__delete_event");
-    expect(first.markdown).toContain("evt_1");
-    expect(first.markdown.startsWith("Today:")).toBe(true);
+    expect(first.markdown).toContain("Delete this event");
+    expect(first.markdown).toContain("**Google Calendar**");
+    expect(first.markdown).not.toContain("evt_1");
+    expect(first.markdown).not.toContain("google_calendar__");
+    expect(first.markdown.startsWith("1 thing changed")).toBe(true);
     expect(first.imageUrl).toContain("/roundup/card.png?t=");
     expect(first.png[0]).toBe(137);
     const id = first.lines.find((line) => line.undo)?.id;

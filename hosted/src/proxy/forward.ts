@@ -10,7 +10,7 @@ export interface ToolReply {
   structuredContent?: Record<string, unknown>;
 }
 
-export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, target: UpstreamTarget, tool: string, args: unknown): Promise<ToolReply> {
+export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, target: UpstreamTarget, tool: string, args: unknown, client?: string): Promise<ToolReply> {
   const started = Date.now();
   const classification = classifyToolName(tool);
   const secrets = target.auth?.value ? [target.auth.value] : [];
@@ -31,6 +31,7 @@ export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, t
       durationMs,
       ...(resultText ? { result: resultText } : {}),
       ...(failed ? { error: resultText || "The upstream reported an error." } : {}),
+      ...(client ? { client } : {}),
     });
     return replyFrom(result, target.name, tool);
   } catch (error) {
@@ -47,6 +48,7 @@ export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, t
       classification,
       durationMs,
       error: message,
+      ...(client ? { client } : {}),
     });
     return {
       isError: true,
@@ -66,6 +68,7 @@ async function recordSafe(deps: CoreDeps, input: {
   durationMs: number;
   result?: string;
   error?: string;
+  client?: string;
 }): Promise<void> {
   try {
     await recordProxyCall(deps, input);

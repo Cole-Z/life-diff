@@ -8,6 +8,8 @@ export interface OpenSession {
   warnings: string[];
   /** The user named these repositories for this session. */
   githubOptIn?: boolean;
+  /** Last proxied call or start. Idle close uses this, then startedAt. */
+  activityAt?: string;
 }
 
 export type ActionSource = "proxy" | "claim";
@@ -36,6 +38,7 @@ export interface LoggedAction {
   summary?: string;
   status?: string;
   result?: string;
+  client?: string;
 }
 
 export interface NewAction {
@@ -59,6 +62,7 @@ export interface NewAction {
   summary?: string;
   status?: string;
   result?: string;
+  client?: string;
 }
 
 export interface SessionState {
@@ -116,7 +120,13 @@ export class SessionBook {
       sessionId: open.id,
     });
     this.state.actions.push(stored);
+    this.state.open = { ...open, activityAt: action.loggedAt };
     return { ...stored };
+  }
+
+  touch(sessionId: string, at: string): void {
+    if (this.state.open?.id !== sessionId) return;
+    this.state.open = { ...this.state.open, activityAt: at };
   }
 
   list(sessionId: string): LoggedAction[] {
@@ -171,6 +181,7 @@ function parseOpen(raw: unknown): OpenSession | null {
     repos: Array.isArray(record.repos) ? record.repos.filter((item): item is string => typeof item === "string") : [],
     warnings: Array.isArray(record.warnings) ? record.warnings.filter((item): item is string => typeof item === "string") : [],
     ...(record.githubOptIn === true ? { githubOptIn: true } : {}),
+    ...(typeof record.activityAt === "string" ? { activityAt: record.activityAt } : {}),
   };
 }
 
@@ -202,6 +213,7 @@ function parseAction(raw: unknown): LoggedAction | null {
     ...(typeof record.summary === "string" ? { summary: record.summary } : {}),
     ...(typeof record.status === "string" ? { status: record.status } : {}),
     ...(typeof record.result === "string" ? { result: record.result } : {}),
+    ...(typeof record.client === "string" ? { client: record.client } : {}),
   });
 }
 
@@ -228,5 +240,6 @@ function copyAction(action: LoggedAction): LoggedAction {
     ...(action.summary ? { summary: action.summary } : {}),
     ...(action.status ? { status: action.status } : {}),
     ...(action.result ? { result: action.result } : {}),
+    ...(action.client ? { client: action.client } : {}),
   };
 }

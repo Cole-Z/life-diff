@@ -103,6 +103,8 @@ export interface RecordedAction {
   durationMs?: number;
   arguments?: unknown;
   source: "proxy";
+  /** MCP client that reported the call, when more than one agent is in view. */
+  client?: string;
 }
 
 export interface Receipt {

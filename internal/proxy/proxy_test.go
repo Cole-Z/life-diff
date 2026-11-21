@@ -76,7 +76,7 @@ func TestProxyPassthroughRecordsAndRedacts(t *testing.T) {
 	if created.Tool != "create_page" || created.Tone != "created" || !created.OK {
 		t.Fatalf("created %#v", created)
 	}
-	if created.Summary != `Added "Q2 goals" in `+serviceLabel(filepath.Base(os.Args[0]))+"." && !strings.Contains(created.Summary, "Q2 goals") {
+	if !strings.Contains(created.Summary, "Q2 goals") || strings.Contains(created.Summary, "create_page") {
 		t.Fatalf("summary %q", created.Summary)
 	}
 	encoded, _ := json.Marshal(created.Arguments)
@@ -151,11 +151,11 @@ func TestClassifyReadsAndSummaries(t *testing.T) {
 	if ask.effect != "read" || ask.verb != "ask" {
 		t.Fatalf("ask %#v", ask)
 	}
-	if got := plainAction("deepwiki", ask, "How does React work?", true, "ask_wiki_question"); got != "Asked Deepwiki: “How does React work?”." {
+	if got := plainAction("deepwiki", ask, "How does React work?", true, "ask_wiki_question"); got != "Asked DeepWiki about 'How does React work?'." {
 		t.Fatalf("ask summary %q", got)
 	}
 	read := classifyTool("read_wiki_structure")
-	if got := plainAction("deepwiki", read, "facebook/react", true, "read_wiki_structure"); got != "Read read_wiki_structure from Deepwiki: “facebook/react”." {
+	if got := plainAction("deepwiki", read, "facebook/react", true, "read_wiki_structure"); got != "Looked up the docs outline for facebook/react in DeepWiki." {
 		t.Fatalf("read summary %q", got)
 	}
 	for _, name := range []string{"get_page", "describe_repo", "lookup_user", "check_status"} {

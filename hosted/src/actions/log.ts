@@ -2,6 +2,8 @@ import { normalizeAction } from "../receipt/claims";
 import type { ClaimInput } from "../receipt/types";
 import type { LoggedAction } from "../session/book";
 
+export const ACTION_VALUES = ["added", "removed", "modified", "read"] as const;
+
 const RESOURCES = new Set(["commit", "branch", "pull_request", "issue", "comment", "label", "file"]);
 
 export interface ActionInput {
@@ -23,9 +25,13 @@ export function validateAction(input: ActionInput): { action?: string; resource?
   if (input.detail && input.detail.length > 2000) throw new Error("detail is too long");
   let action: string | undefined;
   if (input.action && input.action.trim()) {
-    const normalized = normalizeAction(input.action);
-    if (!normalized) throw new Error("action must be added, removed, or modified");
-    action = normalized;
+    const folded = input.action.trim().toLowerCase();
+    if (folded === "read") action = "read";
+    else {
+      const normalized = normalizeAction(input.action);
+      if (!normalized) throw new Error("action must be added, removed, modified, or read");
+      action = normalized;
+    }
   }
   let resource: string | undefined;
   if (input.resource && input.resource.trim()) {
@@ -43,7 +49,7 @@ export function validateAction(input: ActionInput): { action?: string; resource?
 }
 
 export function actionsToClaims(actions: LoggedAction[]): ClaimInput[] {
-  return actions.filter((action) => action.source !== "proxy").map((action) => {
+  return actions.filter((action) => action.source !== "proxy" && action.action !== "read" && action.effect !== "read").map((action) => {
     const detail = [action.tool ? `Tool ${action.tool}` : "", action.detail ?? ""].filter(Boolean).join(". ");
     const claim: ClaimInput = {
       id: action.id,

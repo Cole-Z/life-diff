@@ -1,6 +1,6 @@
 # Action log
 
-Life Diff records tool calls that an agent routes through it. A recorded call is **reported by proxy**. It means Life Diff saw the request and the response. It does not mean the account changed, and it does not mean the tool did what the agent intended.
+Life Diff records tool calls that an agent routes through it. A recorded call is **reported by the agent**. It means Life Diff saw the request and the response. It does not mean the account changed, and it does not mean the tool did what the agent intended. The sentence a person sees names the object and the service. It does not include the raw tool name.
 
 Where a service exposes its own history, Life Diff can also read that history. Today that check is GitHub. Those lines are **verified from service history**. Provider diffs stay the source of truth for that service. The action log is the list of calls the proxy saw.
 
@@ -42,7 +42,7 @@ MCP clients cache `tools/list`. After `add_upstream` or `remove_upstream`, Life 
 
 `end_session` writes the receipt. `get_receipt` returns a link to `https://lifediff.dev/receipts/<id>`. The page groups calls by service, lists writes first, collapses reads, and keeps the GitHub diff when this session had a snapshot.
 
-`log_action` still records a claim the agent states in its own words. Life Diff does not run that tool. On a session that snapshotted GitHub, the claim is checked against the diff. On a proxy-only session it is kept and marked not verified, because there was nothing to compare.
+`log_action` still records a claim the agent states in its own words. `action` is `added`, `removed`, `modified`, or `read`. Life Diff does not run that tool. On a session that snapshotted GitHub, an added, removed, or modified claim is checked against the diff. A `read` is counted with the lookups and is not checked. On a proxy-only session a write claim is kept and marked not verified, because there was nothing to compare.
 
 ## Local stdio proxy
 

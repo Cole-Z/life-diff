@@ -116,7 +116,7 @@ describe("session flow", () => {
     for (const key of keys) expect(objects.objects.has(key)).toBe(false);
   });
 
-  it("closes a session that has been open for 30 minutes and starts another", async () => {
+  it("closes a session after 20 idle minutes and starts another", async () => {
     const book = new SessionBook();
     const meta = new MemoryMetadataStore();
     const objects = new MemoryObjectStore();
@@ -135,12 +135,15 @@ describe("session flow", () => {
       objects,
     };
     const first = await startSession(deps, {});
-    const recent = await startSession({ ...deps, now: new Date("2026-04-02T15:29:00.000Z") }, {});
-    expect(recent.sessionId).toBe(first.sessionId);
-    const next = await startSession({ ...deps, now: new Date("2026-04-02T15:30:00.000Z") }, {});
+    const next = await startSession({ ...deps, now: new Date("2026-04-02T15:20:00.000Z") }, {});
     expect(next.sessionId).not.toBe(first.sessionId);
     expect(meta.receipts.size).toBe(1);
-    expect(book.getOpen()?.id).toBe(next.sessionId);
+    const reused = await startSession({ ...deps, now: new Date("2026-04-02T15:39:00.000Z") }, {});
+    expect(reused.sessionId).toBe(next.sessionId);
+    const after = await startSession({ ...deps, now: new Date("2026-04-02T15:59:00.000Z") }, {});
+    expect(after.sessionId).not.toBe(next.sessionId);
+    expect(meta.receipts.size).toBe(2);
+    expect(book.getOpen()?.id).toBe(after.sessionId);
   });
 });
 

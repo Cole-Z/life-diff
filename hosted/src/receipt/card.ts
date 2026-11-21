@@ -103,21 +103,29 @@ y 00 00 11 11 0f 01 0e
 z 00 00 1f 02 04 08 1f
 `);
 
-export async function renderCardPng(lines: StoryLine[], title: string): Promise<Uint8Array> {
-  const rows = cardRows(lines);
+export async function renderCardPng(lines: StoryLine[], title: string, caption = "Today"): Promise<Uint8Array> {
   const width = 720;
-  const header = 78;
+  const advance = (GLYPH_W + 1) * SCALE;
+  const maxChars = Math.floor((width - 48) / advance);
+  const headline = wrapCard(headlineFor(lines, caption), maxChars);
+  const body = cardRows(lines).flatMap((row) => wrapCard(row.text, Math.floor((width - 56) / advance)).map((text) => ({
+    color: row.color,
+    text,
+  }))).slice(0, 18);
   const lineH = 26;
-  const height = header + 16 + Math.max(rows.length, 1) * lineH + 20;
+  const mast = 72;
+  const height = mast + 16 + (headline.length + Math.max(body.length, 1)) * lineH + 20;
   const pixels = new Uint8Array(width * height * 3);
   fill(pixels, PAPER);
-  rect(pixels, width, 0, 0, width, 64, MAST);
-  drawText(pixels, width, 20, 22, title, MAST_INK);
-  drawText(pixels, width, 20, 78, headlineFor(lines, "Today"), INK);
-  rows.forEach((row, index) => {
-    const y = header + 16 + index * lineH;
-    const color = hex(row.color);
-    rect(pixels, width, 20, y + 4, 12, 12, color);
+  rect(pixels, width, 0, 0, width, mast, MAST);
+  drawText(pixels, width, 20, 14, cardPlain(title), MAST_INK);
+  drawText(pixels, width, 20, 40, cardPlain(caption), MAST_INK);
+  headline.forEach((text, index) => {
+    drawText(pixels, width, 20, mast + 12 + index * lineH, text, INK);
+  });
+  body.forEach((row, index) => {
+    const y = mast + 12 + headline.length * lineH + index * lineH;
+    rect(pixels, width, 20, y + 4, 12, 12, hex(row.color));
     drawText(pixels, width, 40, y, row.text, INK);
   });
   return encodePng(width, height, pixels);
@@ -148,15 +156,7 @@ function parseFont(source: string): Map<string, number[]> {
 }
 
 const EXTRA: Record<string, number[]> = {
-  "\u201c": [0x06, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00],
-  "\u201d": [0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x06],
-  "\u2018": [0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00],
-  "\u2019": [0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x04],
-  "\u2014": [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
-  "\u2013": [0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00],
-  "\u2212": [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
   "\u00b7": [0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00],
-  "\u2026": [0x00, 0x00, 0x00, 0x00, 0x00, 0x15, 0x00],
 };
 
 for (const [ch, rows] of Object.entries(EXTRA)) FONT.set(ch, rows);
@@ -166,10 +166,20 @@ const FOLD: Record<string, string> = {
   "\u2010": "-",
   "\u2011": "-",
   "\u2012": "-",
+  "\u2013": "-",
+  "\u2014": "-",
   "\u2015": "-",
+  "\u2212": "-",
   "\u2022": "*",
   "\u00ab": "\"",
   "\u00bb": "\"",
+  "\u201c": "\"",
+  "\u201d": "\"",
+  "\u201e": "\"",
+  "\u2018": "'",
+  "\u2019": "'",
+  "\u201a": "'",
+  "\u2026": ".",
 };
 
 /** Font key for a character. Empty means the character is skipped, never drawn as "?". */
@@ -217,22 +227,44 @@ function rect(pixels: Uint8Array, width: number, x: number, y: number, w: number
   }
 }
 
+/** Map punctuation onto glyphs this bitmap font actually has, then wrap instead of cutting the line off. */
+export function cardPlain(value: string): string {
+  return [...value].map((ch) => (ch === "\u2026" ? "..." : FOLD[ch] ?? ch)).join("");
+}
+
+export function wrapCard(text: string, maxChars: number): string[] {
+  const plain = cardPlain(text).replace(/\s+/g, " ").trim();
+  if (!plain) return [""];
+  const limit = Math.max(8, maxChars);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of plain.split(" ")) {
+    let rest = word;
+    while (rest.length > limit) {
+      if (current) {
+        lines.push(current);
+        current = "";
+      }
+      lines.push(rest.slice(0, limit));
+      rest = rest.slice(limit);
+    }
+    if (!rest) continue;
+    if (!current) current = rest;
+    else if (`${current} ${rest}`.length <= limit) current = `${current} ${rest}`;
+    else {
+      lines.push(current);
+      current = rest;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length > 0 ? lines : [""];
+}
+
 function drawText(pixels: Uint8Array, width: number, x: number, y: number, text: string, color: Rgb): void {
   const advance = (GLYPH_W + 1) * SCALE;
-  const limit = width - 8 - advance * 3;
-  const chars = [...text];
   let cursor = x;
-  for (let index = 0; index < chars.length; index += 1) {
-    const ch = chars[index] ?? "";
+  for (const ch of text) {
     if (cursor + advance > width - 8) break;
-    if (cursor > limit && index < chars.length - 1) {
-      for (const dot of "...") {
-        const mark = glyphRows(dot);
-        if (mark) blit(pixels, width, cursor, y, mark, color);
-        cursor += advance;
-      }
-      break;
-    }
     const glyph = glyphRows(ch);
     if (glyph) blit(pixels, width, cursor, y, glyph, color);
     cursor += advance;

@@ -1,35 +1,106 @@
 # Life Diff
 
-What did all your AI agents change today?
+Life Diff is what all your AI agents changed across your tools today. GitHub is only how you sign in, plus an optional check of repositories you name.
 
-Life Diff is a daily before-and-after of the tools your agents used. Green is something created, amber is something changed, red is something deleted or sent, gray is a read, and a warning mark is a call that failed. A person who does not write code can read the one-line summary. The web page keeps the per-file detail behind an expander.
+![A session receipt: four changes, one failure, and a few lookups](docs/images/receipt-light.webp)
 
-GitHub is the sign-in. It is also an optional extra: Life Diff reads repository history only for repositories you name in `start_session`, and only after you turn that on in settings. The daily page stays a life diff until you do. Lines from forwarded tools are labeled **reported by the proxy**. A proxied line is not proof the service changed. A verified line exists only where that service exposes history, and an item is removed only when the service says it was removed or closed. Missing from a list is not a deletion.
+## What you get
 
-Life Diff only sees calls that are routed through it. A tool the agent calls some other way is absent. The proxy does not block, rewrite, or retry a call.
+The first line says whether to care. Writes come first, in plain words, with a link when one is known. Lookups collapse to one quiet line. A failure is red and says why. A line GitHub confirmed says so. Everything else says the agent reported it.
 
-## Quickstart
+![The same receipt in dark mode](docs/images/receipt-dark.webp)
 
-### Add it to an agent by URL
+![The end-of-day page](docs/images/daily.webp)
 
-In Claude, Cursor, or another MCP client, add a remote MCP server:
+![The session card. The header says This session.](docs/images/card.png)
 
-`https://lifediff.dev/mcp`
+## Quick start
 
-Sign in with GitHub when the client asks. Life Diff keeps the GitHub token. The client receives a Life Diff token.
+1. Add `https://lifediff.dev/mcp` in your client.
 
-Register the other MCP servers the agent should use. On [lifediff.dev/settings](https://lifediff.dev/settings), add a name, an https URL, and a token if that server requires one. Or tell the agent to call `add_upstream`. A public server that needs no token:
+Claude Code (`.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "lifediff": {
+      "type": "http",
+      "url": "https://lifediff.dev/mcp"
+    }
+  }
+}
+```
+
+Cursor (`~/.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "lifediff": {
+      "url": "https://lifediff.dev/mcp"
+    }
+  }
+}
+```
+
+Gemini CLI (`~/.gemini/settings.json`). `httpUrl` is the Streamable HTTP key. `url` in this file means the older SSE transport.
+
+```json
+{
+  "mcpServers": {
+    "lifediff": {
+      "httpUrl": "https://lifediff.dev/mcp"
+    }
+  }
+}
+```
+
+2. Sign in with GitHub when the client asks. That sign-in is the account. It does not, by itself, put repository history on the receipt.
+
+3. Add an upstream, on [lifediff.dev/settings](https://lifediff.dev/settings) or by telling the agent to call `add_upstream`. A public server that needs no token:
 
 - name: `deepwiki`
 - url: `https://mcp.deepwiki.com/mcp`
 
-Reconnect the agent after adding an upstream. Clients often cache `tools/list`. Life Diff also sends `notifications/tools/list_changed` when the client can receive it. The new tools are named `deepwiki__read_wiki_structure`, `deepwiki__read_wiki_contents`, and `deepwiki__ask_wiki_question`: the upstream name, two underscores, then the tool name.
+Reconnect if the client cached the tool list. The tools are named `deepwiki__read_wiki_structure` and so on: the upstream name, two underscores, then the tool name.
 
-Let the agent call two or three of those tools. The first forwarded call opens a session if you did not call `start_session`. Call `end_session` when that piece of work is finished. At the end of the day, call `get_daily_diff` (`get_roundup` is the same tool) and show the markdown. The day is your local calendar day, America/Chicago until you set another zone on the settings page. Open sessions are closed into that day. The full page is [lifediff.dev/roundup](https://lifediff.dev/roundup).
+4. Work normally. The first proxied call opens a session if none is open. Ask the agent to call `end_session` before its final reply. An idle session closes itself after 20 minutes (change that on the settings page) and writes the receipt then. At the end of the day, `get_daily_diff` (`get_roundup` is the same tool) is the whole day. The page is [lifediff.dev/roundup](https://lifediff.dev/roundup).
 
-Pass `repos` to `start_session` only for repositories you want in that session. Leave it out and Life Diff does not read GitHub. Turn on **Include GitHub repository changes** in settings before those changes appear on the daily page.
+Pass `repos` to `start_session` only for repositories you want checked. Leave it out and GitHub is not read. Turn on **Include GitHub repository changes** in settings before those changes appear on the daily page. `log_action` takes `action` as `added`, `removed`, `modified`, or `read`. A read is counted with the lookups.
 
-`list_upstreams` and `remove_upstream` manage the same list. Tokens are encrypted with the existing key and are never returned or written to a log.
+5. This is the receipt the agent shows. The card image comes with the tool result. The markdown does not include the card token.
+
+```markdown
+4 things changed, 1 needs a look
+
+**GitHub**
+cole-z/cardpost
+🟢 Opened pull request "Fix login" (#12) on cole-z/cardpost. · [Open](https://github.com/cole-z/cardpost/pull/12) · Confirmed by GitHub
+
+**Gmail**
+🔴 Sent 'Notes for Friday' from Gmail. · [Open](https://mail.google.com/mail/u/0/#drafts/demo) · Reported by the agent · Grok Bot
+
+**Google Calendar**
+🟢 Created event 'Team standup' in Google Calendar. · [Open](https://calendar.google.com/calendar/r/eventedit/demo) · Reported by the agent · Delete this event · Grok Bot
+
+**Google Drive**
+🟡 Renamed 'Q2 goals' to 'Q2 plan' in Google Drive. · [Open](https://drive.google.com/file/d/demo/view) · Reported by the agent · Cursor
+
+**Notion**
+⚠️ Could not create page 'Launch checklist' in Notion. The page was not saved. · Reported by the agent · Cursor
+
+**DeepWiki**
+⚪ 2 lookups · Reported by the agent · Grok Bot
+
+**Slack**
+⚪ 1 lookup · Reported by the agent · Cursor
+
+Full receipt: https://lifediff.dev/receipts/rcpt_demo
+```
+
+A day with only lookups starts `Nothing changed · 2 lookups`. A session that only looked things up starts `Read-only session`.
+
+Life Diff only sees calls routed through it. It does not block, rewrite, or retry a call. A missing list item is not a deletion. Tokens are encrypted and are never returned or written to a log.
 
 ### On this computer
 
@@ -198,7 +269,7 @@ A bare array is also accepted. `action` may be `added`, `removed`, `modified`, o
 
 ## MCP server
 
-The hosted server is `https://lifediff.dev/mcp`. Its tools are `start_session`, `end_session`, `get_daily_diff`, `get_roundup`, `get_receipt`, `list_receipts`, `log_action`, `add_upstream`, `list_upstreams`, `remove_upstream`, and `clear_my_history`, plus one namespaced tool for each tool on a registered upstream. `end_session`, `get_receipt`, and `get_daily_diff` return markdown to show as-is. A session from the last 30 minutes is reused when it covers the same repositories. An older open session, or one with a different repository list, is closed into a receipt first. `get_daily_diff` is the day's diff across every session. `get_roundup` is the same tool. The page is [lifediff.dev/roundup](https://lifediff.dev/roundup). Listing notes are in [docs/marketplace.md](docs/marketplace.md). Nothing in this repository publishes the server to a registry.
+The hosted server is `https://lifediff.dev/mcp`. Its tools are `start_session`, `end_session`, `get_daily_diff`, `get_roundup`, `get_receipt`, `list_receipts`, `log_action`, `add_upstream`, `list_upstreams`, `remove_upstream`, and `clear_my_history`, plus one namespaced tool for each tool on a registered upstream. `end_session`, `get_receipt`, and `get_daily_diff` return markdown to show as-is. A session stays open until `end_session`, or until it has been idle for 20 minutes (5 to 180, on the settings page). A new `start_session` closes a stale one into a receipt first, so an old open session never blocks the next start. `get_daily_diff` is the day's diff across every session. Pass `since` as `last_viewed` for lines since the last time you opened it. `get_roundup` is the same tool. The page is [lifediff.dev/roundup](https://lifediff.dev/roundup). Listing notes are in [docs/marketplace.md](docs/marketplace.md). Nothing in this repository publishes the server to a registry.
 
 `lifediff mcp` is the local stdio server for the Google snapshot. Run `lifediff auth` once first. The tools are `snapshot`, `diff`, and `get_receipt`. Logs stay off stdout so they do not break the protocol. `lifediff proxy -- <command>` is the local pass-through described above.
 

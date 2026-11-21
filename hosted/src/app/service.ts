@@ -11,12 +11,12 @@ import type { GitHubApi, GitHubSnapshot } from "../github/types";
 import { buildActionReceipt, buildReceipt, plainSummary } from "../receipt/build";
 import { renderHtml } from "../receipt/html";
 import type { ClaimInput, ClaimResult, Receipt, RecordedAction } from "../receipt/types";
-import { SessionBook, type LoggedAction, type NewAction, type OpenSession } from "../session/book";
+import { SessionBook, type CloseClaim, type LoggedAction, type NewAction, type OpenSession } from "../session/book";
 import type { Classification } from "../proxy/classify";
 import { boundJson, redactSnippet, redactStrings, redactText } from "../proxy/redact";
 import { attachReadClaims, corroborateActions } from "../receipt/corroborate";
 import { phraseAction } from "../receipt/phrase";
-import type { MetadataStore, ObjectStore, ReceiptMeta } from "../storage/types";
+import type { MetadataStore, ObjectStore, ReceiptMeta, SessionRow } from "../storage/types";
 
 export class AppError extends Error {
   constructor(message: string) {
@@ -32,6 +32,8 @@ export interface SessionPort {
   list(sessionId: string): Promise<LoggedAction[]>;
   close(sessionId: string): Promise<void>;
   touch(sessionId: string, at: string): Promise<void>;
+  claimClose(sessionId?: string): Promise<CloseClaim>;
+  abortClose(sessionId: string): Promise<void>;
 }
 
 export function sessionPortFromBook(book: SessionBook): SessionPort {
@@ -42,6 +44,8 @@ export function sessionPortFromBook(book: SessionBook): SessionPort {
     list: async (sessionId) => book.list(sessionId),
     close: async (sessionId) => book.close(sessionId),
     touch: async (sessionId, at) => book.touch(sessionId, at),
+    claimClose: async (sessionId) => book.claimClose(sessionId),
+    abortClose: async (sessionId) => book.abortClose(sessionId),
   };
 }
 
@@ -72,6 +76,9 @@ export interface StartResult {
 }
 
 export const DEFAULT_IDLE_MINUTES = 20;
+const RECENT_CLOSE_MS = 24 * 60 * 60 * 1000;
+const CLOSE_WAIT_MS = 15_000;
+const CLOSE_POLL_MS = 20;
 
 export async function startSession(deps: AppDeps, input: { repos?: string[]; timeZone?: string }): Promise<StartResult> {
   const requested = namedRepos(input.repos);
@@ -146,13 +153,43 @@ export interface EndResult {
 }
 
 export async function endSession(deps: AppDeps, input: { sessionId?: string; claims?: ClaimInput[]; timeZone?: string; allowGitHubFailure?: boolean }): Promise<EndResult> {
-  const open = await deps.sessions.getOpen();
-  if (!open || (input.sessionId && input.sessionId !== open.id)) throw new AppError("There is no open session to end.");
+  const claim = await deps.sessions.claimClose(input.sessionId);
+  switch (claim.status) {
+    case "mismatch":
+      throw new AppError("There is no open session to end.");
+    case "busy":
+    case "idle": {
+      const existing = await replayClosed(deps, input.sessionId, claim.status === "busy");
+      if (existing) return existing;
+      throw new AppError("There is no open session to end.");
+    }
+    case "claimed":
+      break;
+    default: {
+      const never: never = claim;
+      throw new AppError(`Unhandled close (${JSON.stringify(never)})`);
+    }
+  }
+  const prior = await replayClosed(deps, claim.session.id, false);
+  if (prior) {
+    await deps.sessions.close(claim.session.id);
+    return prior;
+  }
+  try {
+    return await commitClose(deps, claim, input);
+  } catch (error) {
+    try { await deps.sessions.abortClose(claim.session.id); } catch { /* the original error is the one to surface */ }
+    throw error;
+  }
+}
+
+async function commitClose(deps: AppDeps, claim: Extract<CloseClaim, { status: "claimed" }>, input: { sessionId?: string; claims?: ClaimInput[]; timeZone?: string; allowGitHubFailure?: boolean }): Promise<EndResult> {
+  const open = claim.session;
   const checkedAt = deps.now.toISOString();
-  const logged = await deps.sessions.list(open.id);
+  const logged = claim.actions;
   const folded = corroborateActions(logged);
   const foldedIds = new Set(folded.foldedClaimIds);
-  const prepared = prepareClaims(combineClaims(logged, input.claims)).filter((claim) => !claim.id || !foldedIds.has(claim.id));
+  const prepared = prepareClaims(combineClaims(logged, input.claims)).filter((item) => !item.id || !foldedIds.has(item.id));
   const hasSnapshot = Boolean(open.snapshotKey);
   const githubClaims = hasSnapshot ? prepared.filter((claim) => isGitHubClaimService(claim.service)) : [];
   const timeZone = input.timeZone && validTimeZone(input.timeZone) ? input.timeZone : open.timeZone;
@@ -208,14 +245,70 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
     missingClaims: receipt.counts.missingClaims,
     unclaimedChanges: receipt.counts.unclaimedChanges,
   });
-  await deps.meta.closeSession({
+  const won = await deps.meta.closeSession({
     id: open.id,
     endedAt: checkedAt,
     receiptId,
     snapshotExpiresAt: addHours(checkedAt, deps.snapshotRetentionHours),
   });
+  if (!won) {
+    await deps.meta.deleteReceipt(receiptId);
+    await deps.objects.delete([jsonKey, htmlKey, receiptCardKey(jsonKey)]);
+    try { await deps.sessions.close(open.id); } catch { /* already closed in the session log */ }
+    const existing = await replayClosed(deps, open.id, true);
+    if (existing) return existing;
+    throw new AppError("There is no open session to end.");
+  }
   await deps.sessions.close(open.id);
   return { summary: plainSummary(receipt), receipt, html };
+}
+
+async function replayClosed(deps: CoreDeps, sessionId: string | undefined, wait: boolean): Promise<EndResult | null> {
+  const deadline = Date.now() + (wait ? CLOSE_WAIT_MS : 0);
+  for (;;) {
+    const row = await closedRow(deps, sessionId);
+    if (row?.receiptId && recentlyClosed(deps, row)) {
+      const loaded = await loadStoredReceipt(deps, row.receiptId);
+      if (loaded) return loaded;
+    }
+    if (!wait || Date.now() >= deadline) return null;
+    await delay(CLOSE_POLL_MS);
+  }
+}
+
+async function closedRow(deps: CoreDeps, sessionId: string | undefined): Promise<SessionRow | null> {
+  if (sessionId) {
+    const row = await deps.meta.getSession(deps.userId, sessionId);
+    if (!row || row.status !== "closed") return null;
+    return row;
+  }
+  return deps.meta.latestClosedSession(deps.userId);
+}
+
+function recentlyClosed(deps: CoreDeps, row: SessionRow): boolean {
+  if (!row.endedAt) return false;
+  const ended = Date.parse(row.endedAt);
+  if (!Number.isFinite(ended)) return false;
+  const age = deps.now.getTime() - ended;
+  return age >= 0 && age <= RECENT_CLOSE_MS;
+}
+
+async function loadStoredReceipt(deps: CoreDeps, receiptId: string): Promise<EndResult | null> {
+  const meta = await deps.meta.getReceipt(deps.userId, receiptId);
+  if (!meta) return null;
+  const json = await deps.objects.get(meta.jsonKey);
+  const html = await deps.objects.get(meta.htmlKey);
+  if (!json || !html) return null;
+  try {
+    const receipt = redactStrings(JSON.parse(json) as Receipt);
+    return { summary: plainSummary(receipt), receipt, html: redactText(html) };
+  } catch {
+    return null;
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function ensureSession(deps: CoreDeps): Promise<OpenSession> {

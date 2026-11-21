@@ -40,6 +40,7 @@ export function recordedFrom(action: LoggedAction): RecordedAction | null {
     ...(typeof action.durationMs === "number" ? { durationMs: action.durationMs } : {}),
     ...(argumentsValue !== undefined ? { arguments: argumentsValue } : {}),
     ...(action.client ? { client: action.client } : {}),
+    ...(action.repo ? { repo: action.repo } : {}),
     source: claim ? "claim" : "proxy",
   };
 }

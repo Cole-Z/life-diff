@@ -1,5 +1,5 @@
 import { escapeHtml } from "../text";
-import { displayTone, lineMarker, lookupSourcesMixed, serviceLabel, trustLabel, type StoryLine } from "./story";
+import { displayTone, lineMarker, lookupSourcesMixed, repoGroups, serviceLabel, trustLabel, type StoryLine } from "./story";
 
 const ICON_ADDED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M7 1h2v14H7zM1 7h14v2H1z"/></svg>`;
 const ICON_REMOVED = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 7h14v2H1z"/></svg>`;
@@ -159,16 +159,10 @@ function group(lines: StoryLine[]): { service: string; lines: StoryLine[] }[] {
 
 function renderGroup(groupLines: { service: string; lines: StoryLine[] }, showClient: boolean, showReadTrust: boolean): string {
   const letter = (groupLines.service.trim().charAt(0) || "S").toUpperCase();
-  const repos = new Map<string, StoryLine[]>();
-  for (const line of groupLines.lines) {
-    const key = line.repo ?? "";
-    const list = repos.get(key) ?? [];
-    list.push(line);
-    repos.set(key, list);
-  }
-  const blocks = [...repos.entries()].map(([repo, lines]) => {
-    const heading = repo ? `<h3 class="repo">${escapeHtml(repoTitle(repo, lines, showClient))}</h3>` : "";
-    return `${heading}${lines.map((line) => renderLine(line, showClient, showReadTrust)).join("")}`;
+  const blocks = repoGroups(groupLines.lines).map((group) => {
+    const title = group.heading ? repoTitle(group.heading, group.lines, showClient) : "";
+    const heading = title ? `<h3 class="repo">${escapeHtml(title)}</h3>` : "";
+    return `${heading}${group.lines.map((line) => renderLine(line, showClient, showReadTrust)).join("")}`;
   }).join("");
   return `<section>
     <div class="svc"><span class="icon" aria-hidden="true">${escapeHtml(letter)}</span><h2>${escapeHtml(serviceLabel(groupLines.service))}</h2></div>
@@ -177,6 +171,7 @@ function renderGroup(groupLines: { service: string; lines: StoryLine[] }, showCl
 }
 
 function repoTitle(repo: string, lines: StoryLine[], showClient: boolean): string {
+  if (repo === "Other") return "Other";
   const clients = new Set(lines.map((line) => line.client).filter((client): client is string => Boolean(client)));
   const client = clients.size === 1 ? [...clients][0] : undefined;
   const writes = lines.filter((line) => line.write && line.tone !== "failed" && line.tone !== "read");

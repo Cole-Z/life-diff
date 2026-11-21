@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearHistory, endSession, recordProxyCall, sessionPortFromBook, startSession } from "../src/app/service";
+import { clearHistory, endSession, logAction, recordProxyCall, sessionPortFromBook, startSession } from "../src/app/service";
 import { glyphRows, renderCardPng } from "../src/receipt/card";
 import { buildRoundup } from "../src/receipt/roundup";
 import { condenseLines, storyFromActions, storyFromChanges } from "../src/receipt/story";
@@ -157,6 +157,57 @@ describe("the local day", () => {
     const repoHeads = [...day.html.matchAll(/class="repo">([^<]+)/g)].map((match) => match[1]);
     expect(repoHeads.filter((head) => head === "facebook/react")).toEqual(["facebook/react"]);
     expect(repoHeads.indexOf("facebook/react")).toBeLessThan(repoHeads.indexOf("vuejs/core"));
+  });
+
+  it("groups each lookup under its own repo, and leaves a line with no repo under Other", async () => {
+    const store = new MemoryMetadataStore();
+    const objects = new MemoryObjectStore();
+    const book = new SessionBook();
+    const deps = {
+      userId: "42",
+      login: "octocat",
+      now: new Date("2026-04-02T16:00:00.000Z"),
+      timeZone: "UTC",
+      maxRepos: 25,
+      receiptRetentionDays: 90,
+      snapshotRetentionHours: 24,
+      abandonedSessionDays: 7,
+      github: closingIssue(),
+      sessions: sessionPortFromBook(book),
+      meta: store,
+      objects,
+    };
+    await startSession(deps, {});
+    await recordProxyCall(deps, {
+      upstream: "deepwiki",
+      tool: "read_wiki_structure",
+      args: { repoName: "golang/go" },
+      ok: true,
+      status: "ok",
+      summary: "Looked up the docs outline for golang/go in DeepWiki.",
+      classification: { effect: "read", tone: "read", verb: "read" },
+      durationMs: 4,
+    });
+    await logAction(deps, { tool: "deepwiki", action: "read", target: "vercel/next.js wiki structure" });
+    await logAction(deps, { tool: "deepwiki", action: "read", target: "acme/widgets wiki structure", repo: "vuejs/core" });
+    await logAction(deps, { tool: "deepwiki", action: "read", target: "inbox" });
+    const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false, detail: true });
+    const body = day.markdown.slice(day.markdown.indexOf("**DeepWiki**"));
+    const headings = [...body.matchAll(/^(golang\/go|vercel\/next\.js|vuejs\/core|Other)$/gm)].map((match) => match[1]);
+    expect(headings).toEqual(["golang/go", "vercel/next.js", "vuejs/core", "Other"]);
+    const vercel = body.indexOf("\nvercel/next.js\n");
+    const vue = body.indexOf("\nvuejs/core\n");
+    const other = body.indexOf("\nOther\n");
+    expect(body.slice(0, vercel)).not.toContain("vercel/next.js wiki structure");
+    expect(body.slice(vercel, vue)).toContain("vercel/next.js wiki structure");
+    expect(body.slice(vue, other)).toContain("acme/widgets wiki structure");
+    expect(body.slice(0, vue)).not.toContain("acme/widgets");
+    expect(body.slice(other)).toContain("inbox");
+    expect(body.slice(0, other)).not.toContain("inbox");
+    expect(day.html).toContain('<h3 class="repo">vercel/next.js</h3>');
+    expect(day.html).toContain('<h3 class="repo">Other</h3>');
+    expect(day.html.indexOf("vercel/next.js wiki structure")).toBeGreaterThan(day.html.indexOf('<h3 class="repo">vercel/next.js</h3>'));
+    expect(day.html.indexOf("vercel/next.js wiki structure")).toBeLessThan(day.html.indexOf('<h3 class="repo">vuejs/core</h3>'));
   });
 
   it("deletes history and keeps upstream servers", async () => {

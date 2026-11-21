@@ -25,6 +25,8 @@ export function phraseAction(input: PhraseInput): string {
   return built.ok;
 }
 
+const REPO_TOKEN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
 export function repoOf(value: unknown): string | undefined {
   const record = recordOf(value);
   if (!record) return undefined;
@@ -33,6 +35,47 @@ export function repoOf(value: unknown): string | undefined {
   const owner = text(record.owner);
   if (owner && repo) return `${owner}/${repo}`;
   return undefined;
+}
+
+/** The line's own repository: an explicit repo field, then a repo argument, then owner/name in the text. */
+export function lineRepo(input: { repo?: string; arguments?: unknown; summary?: string; target?: string }): string | undefined {
+  const explicit = cleanRepo(input.repo);
+  if (explicit) return explicit;
+  const structured = cleanRepo(repoOf(input.arguments));
+  if (structured) return structured;
+  return scanRepo(input.arguments) || scanRepo(input.target) || scanRepo(input.summary);
+}
+
+function cleanRepo(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (REPO_TOKEN.test(trimmed)) return trimmed;
+  return firstRepo(trimmed);
+}
+
+function scanRepo(value: unknown): string | undefined {
+  if (typeof value === "string") return firstRepo(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = scanRepo(item);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      const found = scanRepo(item);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+function firstRepo(text: string): string | undefined {
+  const github = /github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/.exec(text);
+  if (github?.[1] && REPO_TOKEN.test(github[1])) return github[1];
+  const match = /(?:^|[^A-Za-z0-9_.\/])([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/.exec(text);
+  return match?.[1] && REPO_TOKEN.test(match[1]) ? match[1] : undefined;
 }
 
 export function safeLink(...values: unknown[]): string | undefined {

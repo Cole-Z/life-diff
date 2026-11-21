@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
-import { SessionBook, type LoggedAction, type NewAction, type OpenSession } from "./book";
+import { SessionBook, type CloseClaim, type LoggedAction, type NewAction, type OpenSession } from "./book";
 
 /** One Durable Object per GitHub user. Holds the open session and its action log. */
 export class UserSession extends DurableObject<Env> {
@@ -35,6 +35,19 @@ export class UserSession extends DurableObject<Env> {
   async close(sessionId: string): Promise<void> {
     const book = await this.load();
     book.close(sessionId);
+    await this.save(book);
+  }
+
+  async claimClose(sessionId?: string): Promise<CloseClaim> {
+    const book = await this.load();
+    const claim = book.claimClose(sessionId);
+    await this.save(book);
+    return claim;
+  }
+
+  async abortClose(sessionId: string): Promise<void> {
+    const book = await this.load();
+    book.abortClose(sessionId);
     await this.save(book);
   }
 

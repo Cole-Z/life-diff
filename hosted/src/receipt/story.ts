@@ -3,6 +3,7 @@ import { assertNever } from "../text";
 import { dedupeStoredReads } from "./corroborate";
 import { serviceForClaim } from "./claims";
 import { displayName } from "./names";
+import { lineRepo } from "./phrase";
 import { claimSentence, presentAction } from "./present";
 import { reversalForChange } from "./undo";
 import type { Change, ClaimResult, Receipt, RecordedAction } from "./types";
@@ -136,24 +137,22 @@ export function renderStory(input: {
   const clients = new Set(body.map((line) => line.client).filter((client): client is string => Boolean(client)));
   const showClient = clients.size > 1;
   const parts = [input.headline, ""];
-  let lastService = "";
-  let lastRepo = "";
+  const services = new Map<string, StoryLine[]>();
   for (const line of body) {
-    if (line.service !== lastService) {
-      if (lastService) parts.push("");
-      parts.push(`**${serviceLabel(line.service)}**`);
-      lastService = line.service;
-      lastRepo = "";
+    const list = services.get(line.service) ?? [];
+    list.push(line);
+    services.set(line.service, list);
+  }
+  let index = 0;
+  for (const [service, lines] of services) {
+    if (index > 0) parts.push("");
+    index += 1;
+    parts.push(`**${serviceLabel(service)}**`);
+    for (const group of repoGroups(lines)) {
+      if (group.heading === "Other") parts.push("Other");
+      else if (group.heading) parts.push(repoHeading(group.heading, group.lines, showClient));
+      for (const line of group.lines) parts.push(formatLine(line, showClient && !line.repo, showReadTrust));
     }
-    const repo = line.repo ?? "";
-    if (repo !== lastRepo) {
-      lastRepo = repo;
-      if (repo) {
-        const group = body.filter((item) => item.service === line.service && item.repo === repo);
-        parts.push(repoHeading(repo, group, showClient));
-      }
-    }
-    parts.push(formatLine(line, showClient && !line.repo, showReadTrust));
   }
   if (hidden > 0) parts.push(`+${hidden} more`);
   for (const note of notes) {
@@ -366,6 +365,7 @@ export function storyFromUnverifiedClaims(claims: ClaimResult[], shownIds: Set<s
   return claims.filter((claim) => claim.status === "missing" && claim.action !== "read" && !shownIds.has(claim.id)).map((claim) => {
     const service = serviceForClaim(claim);
     const tone = claim.action === "added" ? "created" : claim.action === "removed" ? "removed" : "changed";
+    const repo = lineRepo({ ...(claim.repo ? { repo: claim.repo } : {}), target: claim.target, summary: claim.detail });
     return {
       service,
       source: "claim" as const,
@@ -383,8 +383,29 @@ export function storyFromUnverifiedClaims(claims: ClaimResult[], shownIds: Set<s
       trust: trustLabel("claim", service),
       hint: "Undo not available yet",
       ...(claim.url?.startsWith("https://") ? { link: claim.url } : {}),
+      ...(repo ? { repo } : {}),
     };
   });
+}
+
+/** Named repositories in first-seen order. Lines with no repo of their own go in Other at the end, and only when some line in the set has a repo. */
+export function repoGroups(lines: StoryLine[]): { heading: string; lines: StoryLine[] }[] {
+  const named = new Map<string, StoryLine[]>();
+  const other: StoryLine[] = [];
+  for (const line of lines) {
+    const repo = line.repo?.trim() ?? "";
+    if (!repo) {
+      other.push(line);
+      continue;
+    }
+    const group = named.get(repo) ?? [];
+    group.push(line);
+    named.set(repo, group);
+  }
+  const groups = [...named.entries()].map(([heading, groupLines]) => ({ heading, lines: groupLines }));
+  if (other.length === 0) return groups;
+  if (groups.length === 0) return [{ heading: "", lines: other }];
+  return [...groups, { heading: "Other", lines: other }];
 }
 
 function toolOf(claim: ClaimResult): string {

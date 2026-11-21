@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { appDeps, coreDeps, sessionStub } from "../app/runtime";
 import { ACTION_VALUES } from "../actions/log";
-import { clearHistory, endSession, getReceipt, listReceipts, logAction, sealOpenSession, startSession, AppError } from "../app/service";
+import { clearHistory, endSession, getReceipt, listReceipts, logAction, startSession, AppError } from "../app/service";
 import type { Env } from "../env";
 import { clientName } from "./client-name";
 import { invalidateUpstreamCache, registerUpstreamTools } from "./upstream-tools";
@@ -31,7 +31,7 @@ const INSTRUCTIONS = [
   "Life Diff is a daily diff of what your AI agents changed across the tools you use. It is not a GitHub diff. GitHub is only how the user signs in.",
   "Route the user's other tool calls through this server. After an upstream is added, its tools are named <upstream>__<tool>. A session starts on the first call if none is open. The proxied result includes that session id. Call end_session before your final reply. Omit sessionId and end_session closes the open session. An idle session closes itself after the quiet period (20 minutes unless the user changed it).",
   "Call log_action only for a change made outside Life Diff. Skip reads. Show the receipt only when something changed. When nothing changed, rely on get_daily_diff instead of pasting an empty receipt.",
-  "Call get_daily_diff at the end of the day (get_roundup is the same tool) and show that markdown to the user. The day follows the user's time zone. When nothing changed, that result is one short line and no card.",
+  "Call get_daily_diff at the end of the day (get_roundup is the same tool) and show that markdown to the user. The day follows the user's time zone. When nothing changed, that result is one short line and no card. get_daily_diff reads an open session as in progress and does not close it.",
   "Pass repos to start_session only for repositories the user explicitly named. Do not treat a missing list item as a deletion. A failed call is a failure, not a read.",
 ].join(" ");
 
@@ -85,7 +85,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "end_session",
     {
-      description: "Close the open session and return the receipt. Omit sessionId to close the current session. Show the markdown only when something changed. When nothing changed, the result is one short line and no card, and imageUrl and cardToken are omitted. get_receipt still returns the card. Rely on get_daily_diff instead of an empty receipt. Optional claims may include before, after, and url.",
+      description: "Close the open session and return the receipt. Omit sessionId to close the current session. If that session, or the most recent one, was already closed in the last day, the saved receipt is returned. Show the markdown only when something changed. When nothing changed, the result is one short line and no card, and imageUrl and cardToken are omitted. get_receipt still returns the card. Rely on get_daily_diff instead of an empty receipt. Optional claims may include before, after, and url.",
       inputSchema: z.object({
         sessionId: z.string().optional(),
         timeZone: z.string().optional(),
@@ -149,7 +149,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "get_daily_diff",
     {
-      description: "Today's diff across every session and agent: what changed, what failed, and how many lookups. Defaults to the user's local day. Pass date (YYYY-MM-DD) for another day, since last_viewed for lines since the last time this was opened, or detail true to list each lookup. When nothing changed, this is one short line and no card. Show the markdown to the user. Rely on this at the end of the day instead of an empty receipt.",
+      description: "Today's diff across every session and agent: what changed, what failed, and how many lookups. Defaults to the user's local day. Pass date (YYYY-MM-DD) for another day, since last_viewed for lines since the last time this was opened, or detail true to list each lookup. An open session is included as in progress and is not closed. When nothing changed, this is one short line and no card. Show the markdown to the user. Rely on this at the end of the day instead of an empty receipt.",
       inputSchema: dailySchema,
     },
     daily,
@@ -248,7 +248,6 @@ function dailyHandler(env: Env) {
       {
         save: true,
         markViewed: true,
-        seal: () => sealOpenSession(deps),
         ...(input.date ? { date: input.date } : {}),
         ...(input.detail ? { detail: true } : {}),
         ...(input.since ? { since: input.since } : {}),

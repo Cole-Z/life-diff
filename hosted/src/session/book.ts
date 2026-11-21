@@ -68,7 +68,18 @@ export interface NewAction {
 export interface SessionState {
   open: OpenSession | null;
   actions: LoggedAction[];
+  /** Set while one closer is building the receipt. A second closer must not build another. */
+  closingId?: string;
+  closingAt?: number;
 }
+
+export type CloseClaim =
+  | { status: "claimed"; session: OpenSession; actions: LoggedAction[] }
+  | { status: "busy"; sessionId: string }
+  | { status: "idle" }
+  | { status: "mismatch" };
+
+const CLOSE_CLAIM_MS = 30_000;
 
 export const MAX_ACTIONS = 500;
 
@@ -94,6 +105,8 @@ export class SessionBook {
     return {
       open: this.state.open ? { ...this.state.open, repos: [...this.state.open.repos], warnings: [...this.state.open.warnings] } : null,
       actions: this.state.actions.map((action) => copyAction(action)),
+      ...(this.state.closingId ? { closingId: this.state.closingId } : {}),
+      ...(typeof this.state.closingAt === "number" ? { closingAt: this.state.closingAt } : {}),
     };
   }
 
@@ -102,7 +115,8 @@ export class SessionBook {
   }
 
   start(session: OpenSession): OpenSession {
-    if (this.state.open) {
+    this.dropStaleClaim();
+    if (this.state.open || this.state.closingId) {
       throw new SessionError("A session is already open. Call end_session before starting another.");
     }
     this.state.open = { ...session, repos: [...session.repos], warnings: [...session.warnings] };
@@ -111,6 +125,9 @@ export class SessionBook {
   }
 
   log(sessionId: string, action: NewAction): LoggedAction {
+    if (this.state.closingId === sessionId) {
+      throw new SessionError("That session is closing.");
+    }
     const open = this.requireOpen(sessionId);
     if (this.state.actions.length >= MAX_ACTIONS) {
       throw new SessionError(`This session already has ${MAX_ACTIONS} logged actions.`);
@@ -138,6 +155,34 @@ export class SessionBook {
     this.requireOpen(sessionId);
     this.state.open = null;
     this.state.actions = [];
+    this.clearClaim(sessionId);
+  }
+
+  /**
+   * One closer wins. The open session stays readable until `close`, so a daily
+   * diff can still show it as in progress, but a second closer gets `busy`.
+   */
+  claimClose(sessionId?: string): CloseClaim {
+    this.dropStaleClaim();
+    const held = this.state.closingId;
+    if (held) {
+      if (!sessionId || sessionId === held) return { status: "busy", sessionId: held };
+      return { status: "mismatch" };
+    }
+    const open = this.state.open;
+    if (!open) return { status: "idle" };
+    if (sessionId && sessionId !== open.id) return { status: "mismatch" };
+    this.state.closingId = open.id;
+    this.state.closingAt = Date.now();
+    return {
+      status: "claimed",
+      session: this.getOpen() as OpenSession,
+      actions: this.state.actions.filter((action) => action.sessionId === open.id).map((action) => copyAction(action)),
+    };
+  }
+
+  abortClose(sessionId: string): void {
+    this.clearClaim(sessionId);
   }
 
   abandon(sessionId: string): void {
@@ -146,6 +191,20 @@ export class SessionBook {
 
   wipe(): void {
     this.state = { open: null, actions: [] };
+  }
+
+  private clearClaim(sessionId: string): void {
+    if (this.state.closingId !== sessionId) return;
+    delete this.state.closingId;
+    delete this.state.closingAt;
+  }
+
+  private dropStaleClaim(): void {
+    if (!this.state.closingId) return;
+    const at = this.state.closingAt;
+    if (typeof at === "number" && Date.now() - at < CLOSE_CLAIM_MS) return;
+    delete this.state.closingId;
+    delete this.state.closingAt;
   }
 
   private requireOpen(sessionId: string): OpenSession {
@@ -158,9 +217,11 @@ export class SessionBook {
 
 function parseState(raw: unknown): SessionState {
   if (!raw || typeof raw !== "object") return { open: null, actions: [] };
-  const record = raw as { open?: unknown; actions?: unknown };
+  const record = raw as { open?: unknown; actions?: unknown; closingId?: unknown; closingAt?: unknown };
   return {
     open: parseOpen(record.open),
+    ...(typeof record.closingId === "string" ? { closingId: record.closingId } : {}),
+    ...(typeof record.closingAt === "number" ? { closingAt: record.closingAt } : {}),
     actions: Array.isArray(record.actions) ? record.actions.flatMap((item) => {
       const action = parseAction(item);
       return action ? [action] : [];

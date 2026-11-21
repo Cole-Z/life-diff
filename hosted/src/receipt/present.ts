@@ -1,5 +1,5 @@
 import { classifyToolName, type Classification } from "../proxy/classify";
-import { phraseAction, repoOf, safeLink } from "./phrase";
+import { lineRepo, phraseAction, safeLink } from "./phrase";
 import { reversalHint } from "./undo";
 import type { ActionTone, RecordedAction } from "./types";
 
@@ -59,7 +59,7 @@ export function presentAction(action: RecordedAction): PresentedAction {
   const write = !failed && classification.effect === "write";
   const undoable = write && Boolean(reversalHint({ ...action, effect: classification.effect, tone: classification.tone }));
   const link = safeLink(action.arguments, action.result);
-  const repo = repoOf(action.arguments);
+  const repo = lineRepo({ ...(action.repo ? { repo: action.repo } : {}), arguments: action.arguments, summary: action.summary });
   return {
     tone: failed ? "failed" : classification.tone === "unknown" ? "read" : classification.tone,
     effect: classification.effect === "write" ? "write" : "read",

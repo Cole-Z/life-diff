@@ -82,10 +82,28 @@ export class D1MetadataStore implements MetadataStore {
     ).bind(row.id, row.userId, row.startedAt, row.endedAt ?? null, row.status, row.snapshotId, row.snapshotKey, row.snapshotExpiresAt, row.receiptId ?? null, row.timeZone, row.repoCount, row.githubOptIn ? 1 : 0).run();
   }
 
-  async closeSession(input: { id: string; endedAt: string; receiptId: string; snapshotExpiresAt: string }): Promise<void> {
-    await this.db.prepare(
-      `UPDATE sessions SET status = 'closed', ended_at = ?, receipt_id = ?, snapshot_expires_at = ? WHERE id = ?`,
+  async getSession(userId: string, sessionId: string): Promise<SessionRow | null> {
+    const row = await this.db.prepare(
+      `SELECT id, user_id, started_at, ended_at, status, snapshot_id, snapshot_r2_key, snapshot_expires_at, receipt_id, time_zone, repo_count, github_opt_in
+       FROM sessions WHERE user_id = ? AND id = ?`,
+    ).bind(userId, sessionId).first<SessionSql>();
+    return row ? sessionRow(row) : null;
+  }
+
+  async latestClosedSession(userId: string): Promise<SessionRow | null> {
+    const row = await this.db.prepare(
+      `SELECT id, user_id, started_at, ended_at, status, snapshot_id, snapshot_r2_key, snapshot_expires_at, receipt_id, time_zone, repo_count, github_opt_in
+       FROM sessions WHERE user_id = ? AND status = 'closed' AND ended_at IS NOT NULL
+       ORDER BY ended_at DESC LIMIT 1`,
+    ).bind(userId).first<SessionSql>();
+    return row ? sessionRow(row) : null;
+  }
+
+  async closeSession(input: { id: string; endedAt: string; receiptId: string; snapshotExpiresAt: string }): Promise<boolean> {
+    const result = await this.db.prepare(
+      `UPDATE sessions SET status = 'closed', ended_at = ?, receipt_id = ?, snapshot_expires_at = ? WHERE id = ? AND status = 'open'`,
     ).bind(input.endedAt, input.receiptId, input.snapshotExpiresAt, input.id).run();
+    return updated(result);
   }
 
   async insertReceipt(row: ReceiptRow): Promise<void> {
@@ -93,6 +111,10 @@ export class D1MetadataStore implements MetadataStore {
       `INSERT INTO receipts (id, user_id, session_id, created_at, expires_at, json_r2_key, html_r2_key, added, removed, modified, verified_claims, missing_claims, unclaimed_changes)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(row.id, row.userId, row.sessionId, row.createdAt, row.expiresAt, row.jsonKey, row.htmlKey, row.added, row.removed, row.modified, row.verifiedClaims, row.missingClaims, row.unclaimedChanges).run();
+  }
+
+  async deleteReceipt(id: string): Promise<void> {
+    await this.db.prepare(`DELETE FROM receipts WHERE id = ?`).bind(id).run();
   }
 
   async listReceipts(userId: string, limit: number): Promise<ReceiptMeta[]> {
@@ -402,6 +424,44 @@ function dailyRow(row: DailySql): DailyDiffRow {
     ...(row.finalized_at ? { finalizedAt: row.finalized_at } : {}),
     ...(row.card_r2_key ? { cardKey: row.card_r2_key } : {}),
   };
+}
+
+interface SessionSql {
+  id: string;
+  user_id: string;
+  started_at: string;
+  ended_at: string | null;
+  status: string;
+  snapshot_id: string;
+  snapshot_r2_key: string | null;
+  snapshot_expires_at: string;
+  receipt_id: string | null;
+  time_zone: string;
+  repo_count: number;
+  github_opt_in: number | null;
+}
+
+function sessionRow(row: SessionSql): SessionRow {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    startedAt: row.started_at,
+    status: row.status === "closed" ? "closed" : "open",
+    snapshotId: row.snapshot_id,
+    snapshotKey: row.snapshot_r2_key ?? "",
+    snapshotExpiresAt: row.snapshot_expires_at,
+    timeZone: row.time_zone,
+    repoCount: row.repo_count,
+    ...(row.github_opt_in ? { githubOptIn: true } : {}),
+    ...(row.ended_at ? { endedAt: row.ended_at } : {}),
+    ...(row.receipt_id ? { receiptId: row.receipt_id } : {}),
+  };
+}
+
+function updated(result: unknown): boolean {
+  if (!result || typeof result !== "object" || !("meta" in result)) return true;
+  const changes = (result as { meta?: { changes?: number } }).meta?.changes;
+  return typeof changes === "number" ? changes > 0 : true;
 }
 
 function receiptMeta(row: ReceiptSql): ReceiptMeta {

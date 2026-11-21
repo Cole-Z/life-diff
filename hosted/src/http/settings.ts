@@ -41,10 +41,18 @@ export async function handleSettings(request: Request, env: Env): Promise<Respon
       const dayEnd = String(form.get("dayEnd") ?? "").trim();
       if (!validTimeZone(timeZone)) return html(await page(meta, session, "Time zone must be an IANA name such as America/Chicago."), 400);
       if (!parseDayEnd(dayEnd)) return html(await page(meta, session, "End of workday must be a time such as 18:00."), 400);
+      const current = await meta.getSettings(session.sub);
+      const idleMinutes = Number(form.get("idleMinutes"));
+      if (!Number.isInteger(idleMinutes) || idleMinutes < 5 || idleMinutes > 180) {
+        return html(await page(meta, session, "Quiet minutes must be a whole number from 5 to 180."), 400);
+      }
       await meta.saveSettings(session.sub, {
+        ...current,
         timeZone,
         dayEnd,
         githubDaily: form.get("githubDaily") === "on",
+        idleMinutes,
+        quietDays: form.get("quietDays") === "on",
       }, new Date().toISOString());
       return redirect("/settings");
     }

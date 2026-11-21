@@ -331,7 +331,7 @@ func classifyTool(name string) classification {
 	if verb := firstToken(tokens, "create", "add", "insert"); verb != "" {
 		return classification{effect: "write", tone: "created", verb: verb}
 	}
-	if verb := firstToken(tokens, "update", "move", "write", "post", "edit", "patch", "set"); verb != "" {
+	if verb := firstToken(tokens, "update", "move", "write", "post", "edit", "patch", "set", "rename"); verb != "" {
 		return classification{effect: "write", tone: "changed", verb: verb}
 	}
 	if verb := firstToken(tokens, "get", "list", "search", "read", "fetch", "query", "ask", "describe", "lookup", "check"); verb != "" {
@@ -352,76 +352,108 @@ func firstToken(tokens []string, words ...string) string {
 }
 
 func plainAction(service string, class classification, subject string, ok bool, tool string) string {
-	label := serviceLabel(service)
+	label := displayName(service)
+	lower := strings.ToLower(tool)
+	if strings.Contains(lower, "read_wiki_structure") {
+		return wikiLine("the docs outline", subject, label, ok)
+	}
+	if strings.Contains(lower, "read_wiki_contents") {
+		return wikiLine("the docs", subject, label, ok)
+	}
 	if !ok {
 		if subject != "" {
-			return fmt.Sprintf("Tried to use %s for “%s”, and it failed.", label, subject)
+			return fmt.Sprintf("Could not use %s for '%s'.", label, subject)
 		}
-		return fmt.Sprintf("Tried to use %s, and it failed.", label)
+		return fmt.Sprintf("Could not use %s.", label)
 	}
 	switch class.tone {
 	case "created":
 		if subject != "" {
-			return fmt.Sprintf("Added “%s” in %s.", subject, label)
+			return fmt.Sprintf("Created '%s' in %s.", subject, label)
 		}
-		return fmt.Sprintf("Added something in %s.", label)
+		return fmt.Sprintf("Created something in %s.", label)
 	case "changed":
 		if subject != "" {
-			return fmt.Sprintf("Changed “%s” in %s.", subject, label)
+			return fmt.Sprintf("Changed '%s' in %s.", subject, label)
 		}
 		return fmt.Sprintf("Changed something in %s.", label)
 	case "removed":
 		if class.verb == "send" {
 			if subject != "" {
-				return fmt.Sprintf("Sent “%s” from %s.", subject, label)
+				return fmt.Sprintf("Sent '%s' from %s.", subject, label)
 			}
 			return fmt.Sprintf("Sent something from %s.", label)
 		}
 		if subject != "" {
-			return fmt.Sprintf("Deleted “%s” in %s.", subject, label)
+			return fmt.Sprintf("Deleted '%s' in %s.", subject, label)
 		}
 		return fmt.Sprintf("Deleted something in %s.", label)
 	case "read":
 		if class.verb == "ask" {
 			if subject != "" {
-				return fmt.Sprintf("Asked %s: “%s”.", label, subject)
+				return fmt.Sprintf("Asked %s about '%s'.", label, subject)
 			}
-			return fmt.Sprintf("Asked %s.", label)
-		}
-		if tool != "" {
-			if subject != "" {
-				return fmt.Sprintf("Read %s from %s: “%s”.", tool, label, subject)
-			}
-			return fmt.Sprintf("Read %s from %s.", tool, label)
+			return fmt.Sprintf("Asked %s a question.", label)
 		}
 		if subject != "" {
-			return fmt.Sprintf("Looked up “%s” in %s.", subject, label)
+			return fmt.Sprintf("Looked up '%s' in %s.", subject, label)
 		}
 		return fmt.Sprintf("Looked something up in %s.", label)
 	default:
-		if tool != "" && subject != "" {
-			return fmt.Sprintf("Called %s on %s: “%s”.", tool, label, subject)
-		}
-		if tool != "" {
-			return fmt.Sprintf("Called %s on %s.", tool, label)
-		}
 		if subject != "" {
-			return fmt.Sprintf("Called a tool on %s: “%s”.", label, subject)
+			return fmt.Sprintf("Looked up '%s' in %s.", subject, label)
 		}
-		return fmt.Sprintf("Called a tool on %s.", label)
+		return fmt.Sprintf("Looked something up in %s.", label)
 	}
 }
 
-func serviceLabel(name string) string {
-	trimmed := strings.TrimSpace(name)
+func wikiLine(what, subject, label string, ok bool) string {
+	topic := subject
+	if topic == "" {
+		topic = "a repository"
+	}
+	if ok {
+		return fmt.Sprintf("Looked up %s for %s in %s.", what, topic, label)
+	}
+	return fmt.Sprintf("Could not look up %s for %s in %s.", what, topic, label)
+}
+
+func displayName(raw string) string {
+	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return "the service"
+		return "Service"
 	}
-	r, size := utf8.DecodeRuneInString(trimmed)
-	if r == utf8.RuneError {
-		return trimmed
+	compact := strings.NewReplacer(" ", "", "_", "", "-", "").Replace(strings.ToLower(trimmed))
+	switch compact {
+	case "deepwiki":
+		return "DeepWiki"
+	case "github":
+		return "GitHub"
+	case "googlecalendar", "calendar":
+		return "Google Calendar"
+	case "googledrive", "drive":
+		return "Google Drive"
+	case "gmail":
+		return "Gmail"
+	case "slack":
+		return "Slack"
+	case "notion":
+		return "Notion"
+	case "linear":
+		return "Linear"
 	}
-	return strings.ToUpper(string(r)) + trimmed[size:]
+	parts := strings.FieldsFunc(trimmed, func(r rune) bool { return r == ' ' || r == '_' || r == '-' })
+	for i, part := range parts {
+		r, size := utf8.DecodeRuneInString(part)
+		if r == utf8.RuneError || size == 0 {
+			continue
+		}
+		parts[i] = strings.ToUpper(string(r)) + part[size:]
+	}
+	if len(parts) == 0 {
+		return "Service"
+	}
+	return strings.Join(parts, " ")
 }
 
 func subject(value any) string {

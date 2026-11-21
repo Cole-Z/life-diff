@@ -20,6 +20,7 @@ describe("classification and names", () => {
     expect(classifyToolName("create_page")).toMatchObject({ effect: "write", tone: "created", verb: "create" });
     expect(classifyToolName("add_upstream")).toMatchObject({ tone: "created" });
     expect(classifyToolName("update_issue")).toMatchObject({ tone: "changed", verb: "update" });
+    expect(classifyToolName("rename_file")).toMatchObject({ tone: "changed", verb: "rename" });
     expect(classifyToolName("delete_file")).toMatchObject({ tone: "removed", verb: "delete" });
     expect(classifyToolName("send_message")).toMatchObject({ effect: "write", tone: "removed", verb: "send" });
     expect(classifyToolName("get_or_create")).toMatchObject({ effect: "write", tone: "created" });
@@ -36,10 +37,10 @@ describe("classification and names", () => {
     expect(classifyToolName("fetch_user")).toMatchObject({ effect: "read" });
     expect(classifyToolName("query_rows")).toMatchObject({ effect: "read" });
     expect(classifyToolName("ping")).toMatchObject({ effect: "unknown", tone: "unknown" });
-    expect(plainAction("deepwiki", classifyToolName("read_wiki_structure"), "facebook/react", true, "read_wiki_structure")).toBe("Read read_wiki_structure from Deepwiki: “facebook/react”.");
-    expect(plainAction("deepwiki", classifyToolName("ask_wiki_question"), "How does React work?", true, "ask_wiki_question")).toBe("Asked Deepwiki: “How does React work?”.");
-    expect(plainAction("deepwiki", classifyToolName("ping"), "pong", true, "ping")).toBe("Called ping on Deepwiki: “pong”.");
-    expect(plainAction("slack", classifyToolName("send_message"), "hello", true)).toBe("Sent “hello” from Slack.");
+    expect(plainAction("deepwiki", classifyToolName("read_wiki_structure"), "facebook/react", true, "read_wiki_structure")).toBe("Looked up the docs outline for facebook/react in DeepWiki.");
+    expect(plainAction("deepwiki", classifyToolName("ask_wiki_question"), "How does React work?", true, "ask_wiki_question")).toBe("Asked DeepWiki about 'How does React work?'.");
+    expect(plainAction("deepwiki", classifyToolName("ping"), "pong", true, "ping")).toBe("Looked up 'pong' in DeepWiki.");
+    expect(plainAction("slack", classifyToolName("send_message"), "hello", true)).toBe("Sent 'hello' from Slack.");
   });
 
   it("namespaces tools as upstream__tool", () => {
@@ -177,13 +178,13 @@ describe("upstream forwarding", () => {
     });
     const ended = await endSession({ ...deps, now: new Date("2026-04-02T15:10:00.000Z") }, {});
     expect(ended.receipt.actions).toHaveLength(3);
-    expect(ended.receipt.actions?.[0]?.summary).toBe("Added “Q2 goals” in Notes.");
+    expect(ended.receipt.actions?.[0]?.summary).toBe("Created page 'Q2 goals' in Notes.");
     expect(ended.receipt.changes).toHaveLength(0);
-    expect(ended.html).toContain("Reported by the proxy");
+    expect(ended.html).toContain("Reported by the agent");
     expect(ended.html).toContain("Verified lines come from a service");
-    expect(ended.html.indexOf("Added “Q2 goals”")).toBeLessThan(ended.html.indexOf("<details class=\"reads\">"));
+    expect(ended.html.indexOf("Created page &#39;Q2 goals&#39;")).toBeLessThan(ended.html.indexOf("<details class=\"reads\">"));
     expect(ended.html).not.toContain("sekret");
-    expect(ended.summary).toContain("Added “Q2 goals” in Notes.");
+    expect(ended.summary).toContain("Created page 'Q2 goals' in Notes.");
   });
 });
 
@@ -259,7 +260,7 @@ describe("auto session and upstream secrets", () => {
     });
     expect(html).toContain("<details class=\"reads\">");
     expect(html).toContain("badge-read");
-    expect(html).toContain("Reported by the proxy");
+    expect(html).toContain("Reported by the agent");
   });
 });
 

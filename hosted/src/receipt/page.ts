@@ -15,10 +15,11 @@ export function renderDiffPage(input: {
   extra?: string;
   footer: string;
 }): string {
+  const clients = new Set(input.lines.map((line) => line.client).filter((client): client is string => Boolean(client)));
   const groups = group(input.lines);
   const body = groups.length === 0
-    ? `<p class="empty">Nothing changed in this window.</p>`
-    : groups.map(renderGroup).join("");
+    ? `<p class="empty">No changes.</p>`
+    : groups.map((item) => renderGroup(item, clients.size > 1)).join("");
   const notes = (input.notes ?? []).map((note) => `<p class="note">${escapeHtml(note)}</p>`).join("");
   return `<!DOCTYPE html>
 <html lang="en">
@@ -42,8 +43,8 @@ export function renderDiffPage(input: {
     --removed-bg: #fdeeee;
     --modified: #6b4300;
     --modified-bg: #fff6e4;
-    --failed: #8a4b08;
-    --failed-bg: #fff1e0;
+    --failed: #8d1c1c;
+    --failed-bg: #fdeeee;
     --read: #5c564c;
     --read-bg: #efeae1;
     --focus: #1e3a32;
@@ -62,8 +63,8 @@ export function renderDiffPage(input: {
       --removed-bg: #3a1717;
       --modified: #f0cb86;
       --modified-bg: #3a2c14;
-      --failed: #f0cb86;
-      --failed-bg: #3a2c14;
+      --failed: #f3b4ae;
+      --failed-bg: #3a1717;
       --read: #c2b8a8;
       --read-bg: #2a251f;
       --focus: #f0cb86;
@@ -97,7 +98,10 @@ export function renderDiffPage(input: {
   article.is-failed { border-left-color: var(--failed); }
   article.is-read, article.is-unknown { border-left-color: var(--read); }
   .summary { margin: 0; font-size: 17px; }
+  article.is-failed .summary { color: var(--failed); font-weight: 650; }
+  h3.repo { font-size: 15px; margin: 14px 0 4px; color: var(--muted); font-family: "Segoe UI", Helvetica, Arial, sans-serif; font-weight: 650; }
   .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .compare.single { grid-template-columns: 1fr; }
   .before, .after { background: var(--read-bg); border-radius: 8px; padding: 6px 8px; white-space: pre-wrap; word-break: break-word; }
   .before { text-decoration: line-through; text-decoration-color: var(--removed); }
   .k { display: block; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); text-decoration: none; }
@@ -153,30 +157,64 @@ function group(lines: StoryLine[]): { service: string; source: StoryLine["source
   return [...groups.values()];
 }
 
-function renderGroup(groupLines: { service: string; source: StoryLine["source"]; lines: StoryLine[] }): string {
+function renderGroup(groupLines: { service: string; source: StoryLine["source"]; lines: StoryLine[] }, showClient: boolean): string {
   const letter = (groupLines.service.trim().charAt(0) || "S").toUpperCase();
-  const source = groupLines.source === "verified" ? "Verified from GitHub" : "Reported by the proxy";
+  const repos = new Map<string, StoryLine[]>();
+  for (const line of groupLines.lines) {
+    const key = line.repo ?? "";
+    const list = repos.get(key) ?? [];
+    list.push(line);
+    repos.set(key, list);
+  }
+  const blocks = [...repos.entries()].map(([repo, lines]) => {
+    const heading = repo ? `<h3 class="repo">${escapeHtml(repoTitle(repo, lines, showClient))}</h3>` : "";
+    return `${heading}${lines.map((line) => renderLine(line, showClient)).join("")}`;
+  }).join("");
   return `<section>
     <div class="svc"><span class="icon" aria-hidden="true">${escapeHtml(letter)}</span><h2>${escapeHtml(serviceLabel(groupLines.service))}</h2></div>
-    <p class="source">${source}</p>
-    ${groupLines.lines.map(renderLine).join("")}
+    ${blocks}
   </section>`;
 }
 
-function renderLine(line: StoryLine): string {
+function repoTitle(repo: string, lines: StoryLine[], showClient: boolean): string {
+  const clients = new Set(lines.map((line) => line.client).filter((client): client is string => Boolean(client)));
+  const client = clients.size === 1 ? [...clients][0] : undefined;
+  const writes = lines.filter((line) => line.write && line.tone !== "failed" && line.tone !== "read");
+  if (showClient && client && writes.length === 1) {
+    const summary = writes[0]?.summary ?? "";
+    const kind = summary.includes("pull request") ? "pull request opened" : summary.includes("issue") ? "issue" : "change";
+    return `${repo}: 1 ${kind} by ${client}`;
+  }
+  if (showClient && client) return `${repo} · ${client}`;
+  return repo;
+}
+
+function renderLine(line: StoryLine, showClient: boolean): string {
+  const who = showClient && line.client && !line.repo ? ` · ${line.client}` : "";
+  if (line.tone === "note") {
+    const text = line.summary.endsWith(".") ? line.summary : `${line.summary}.`;
+    return `<p class="note">${escapeHtml(text)}</p>`;
+  }
   if (line.tone === "read" && line.details && line.details.length > 0 && line.readCount) {
     const items = line.details.map((detail) => `<li>${escapeHtml(detail.text)}</li>`).join("");
-    return `<details class="reads"><summary>${escapeHtml(markerFor(line.tone))} ${escapeHtml(line.summary)}</summary><ul>${items}</ul></details>`;
+    const trust = line.trust ? ` · ${line.trust}` : "";
+    return `<details class="reads"><summary>${escapeHtml(markerFor(line.tone))} ${escapeHtml(line.summary)}${escapeHtml(trust)}${escapeHtml(who)}</summary><ul>${items}</ul></details>`;
   }
   const pairs = (line.details ?? []).filter((detail) => detail.before || detail.after);
   const extras = (line.details ?? []).filter((detail) => !detail.before && !detail.after);
-  const compare = pairs.slice(0, 2).map((detail) => `<div class="compare"><div class="before"><span class="k">Before ${escapeHtml(detail.text)}</span>${escapeHtml(detail.before ?? "")}</div><div class="after"><span class="k">After</span>${escapeHtml(detail.after ?? "")}</div></div>`).join("");
+  const compare = pairs.slice(0, 2).map((detail) => {
+    const before = detail.before ? `<div class="before"><span class="k">Before ${escapeHtml(detail.text)}</span>${escapeHtml(detail.before)}</div>` : "";
+    const after = `<div class="after"><span class="k">${detail.before ? "After" : escapeHtml(detail.text)}</span>${escapeHtml(detail.after ?? "")}</div>`;
+    return `<div class="compare${before ? "" : " single"}">${before}${after}</div>`;
+  }).join("");
   const more = extras.length > 0 || pairs.length > 2
     ? `<details><summary>${extras.length > 0 ? `${extras.length} ${extras.length === 1 ? "detail" : "details"}` : "More"}</summary><ul>${[...pairs.slice(2), ...extras].map((detail) => `<li>${escapeHtml(detailText(detail))}</li>`).join("")}</ul></details>`
     : "";
-  const link = line.link?.startsWith("https://github.com/") ? `<p><a href="${escapeHtml(line.link)}">Open on GitHub</a></p>` : "";
-  const undo = line.undo ? `<p class="undo">${escapeHtml(line.undo)}${line.id ? ` (${escapeHtml(line.id)})` : ""}</p>` : "";
+  const link = line.link?.startsWith("https://") ? `<p><a href="${escapeHtml(line.link)}">Open</a></p>` : "";
+  const undo = line.hint ? `<p class="undo">${escapeHtml(line.hint)}</p>` : "";
+  const trust = line.trust || who ? `<div class="meta"><span class="tag">${escapeHtml(`${line.trust ?? "Reported by the agent"}${who}`)}</span></div>` : "";
   return `<article class="row is-${line.tone}">
+    ${trust}
     <p class="summary">${escapeHtml(markerFor(line.tone))} ${escapeHtml(line.summary)}</p>
     ${compare}
     ${undo}

@@ -1,4 +1,5 @@
-import { assertNever } from "../text";
+import { displayName } from "../receipt/names";
+import { phraseAction } from "../receipt/phrase";
 
 export type ActionEffect = "read" | "write" | "unknown";
 export type ActionTone = "created" | "changed" | "removed" | "read" | "unknown";
@@ -10,7 +11,7 @@ export interface Classification {
 }
 
 const CREATED = new Set(["create", "add", "insert"]);
-const CHANGED = new Set(["update", "move", "write", "post", "edit", "patch", "set"]);
+const CHANGED = new Set(["update", "move", "write", "post", "edit", "patch", "set", "rename"]);
 const REMOVED = new Set(["delete", "remove", "send"]);
 const READ = new Set(["get", "list", "search", "read", "fetch", "query", "ask", "describe", "lookup", "check"]);
 
@@ -29,38 +30,15 @@ export function classifyToolName(name: string): Classification {
 }
 
 export function serviceLabel(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) return "the service";
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  return displayName(name);
 }
 
 export function plainAction(service: string, classification: Classification, subject: string | undefined, ok: boolean, tool?: string): string {
-  const label = serviceLabel(service);
-  const name = tool?.trim() || "";
-  if (!ok) {
-    return subject ? `${label} failed on “${subject}”.` : `${label} failed.`;
-  }
-  switch (classification.tone) {
-    case "created":
-      return subject ? `Added “${subject}” in ${label}.` : `Added something in ${label}.`;
-    case "changed":
-      return subject ? `Changed “${subject}” in ${label}.` : `Changed something in ${label}.`;
-    case "removed":
-      if (classification.verb === "send") {
-        return subject ? `Sent “${subject}” from ${label}.` : `Sent something from ${label}.`;
-      }
-      return subject ? `Deleted “${subject}” in ${label}.` : `Deleted something in ${label}.`;
-    case "read":
-      if (classification.verb === "ask") {
-        return subject ? `Asked ${label}: “${subject}”.` : `Asked ${label}.`;
-      }
-      if (name) return subject ? `Read ${name} from ${label}: “${subject}”.` : `Read ${name} from ${label}.`;
-      return subject ? `Looked up “${subject}” in ${label}.` : `Looked something up in ${label}.`;
-    case "unknown":
-      if (name && subject) return `Called ${name} on ${label}: “${subject}”.`;
-      if (name) return `Called ${name} on ${label}.`;
-      return subject ? `Called a tool on ${label}: “${subject}”.` : `Called a tool on ${label}.`;
-    default:
-      return assertNever(classification.tone, "action tone");
-  }
+  return phraseAction({
+    upstream: service,
+    tool: tool ?? "",
+    classification,
+    ...(subject ? { subject } : {}),
+    ok,
+  });
 }

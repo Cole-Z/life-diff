@@ -43,18 +43,20 @@ describe("grouped lines", () => {
     const reads = [action("r1", true, "Read the structure.", "read"), action("r2", true, "Read the page.", "read")];
     const collapsed = condenseLines(storyFromActions(reads), { detail: false });
     expect(collapsed).toHaveLength(1);
-    expect(collapsed[0]?.summary).toBe("2 reads across Deepwiki");
+    expect(collapsed[0]?.summary).toBe("2 lookups");
     expect(condenseLines(storyFromActions(reads), { detail: true })).toHaveLength(2);
   });
 });
 
 describe("card glyphs", () => {
-  it("draws a curly quote as its own glyph", async () => {
-    expect(glyphRows("“")).not.toBeNull();
+  it("folds a curly quote onto the straight quote the font has", async () => {
+    expect(glyphRows("“")).toEqual(glyphRows('"'));
     expect(glyphRows("“")).not.toEqual(glyphRows("?"));
     const line = { service: "deepwiki", source: "proxy" as const, write: false, tone: "read" as const, seed: "card", summary: "" };
-    const curly = await renderCardPng([{ ...line, summary: "Asked “how”." }], "Today");
-    const marks = await renderCardPng([{ ...line, summary: "Asked ?how?." }], "Today");
+    const curly = await renderCardPng([{ ...line, summary: "Asked “how”." }], "Life Diff", "This session");
+    const straight = await renderCardPng([{ ...line, summary: "Asked \"how\"." }], "Life Diff", "This session");
+    const marks = await renderCardPng([{ ...line, summary: "Asked ?how?." }], "Life Diff", "This session");
+    expect(Buffer.from(curly).equals(Buffer.from(straight))).toBe(true);
     expect(Buffer.from(curly).equals(Buffer.from(marks))).toBe(false);
   });
 });
@@ -101,9 +103,9 @@ describe("the local day", () => {
     });
     await endSession(deps, {});
     const hidden = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
-    expect(hidden.markdown).toContain("How does React work?");
+    expect(hidden.markdown).toContain("1 lookup");
     expect(hidden.markdown).not.toContain("acme/app");
-    await store.saveSettings("42", { timeZone: "America/Chicago", dayEnd: "18:00", githubDaily: true }, deps.now.toISOString());
+    await store.saveSettings("42", { timeZone: "America/Chicago", dayEnd: "18:00", githubDaily: true, idleMinutes: 20, quietDays: false }, deps.now.toISOString());
     const shown = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
     expect(shown.markdown).toContain("acme/app");
   });

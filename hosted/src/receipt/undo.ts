@@ -1,66 +1,31 @@
-import { pickSubject } from "../proxy/redact";
-import type { RecordedAction } from "./types";
+import type { Change, RecordedAction } from "./types";
 
-/** A hint the agent can follow. Life Diff does not run the undo. */
-export function undoHint(action: Pick<RecordedAction, "tool" | "upstream" | "verb" | "tone" | "effect" | "arguments" | "result" | "summary">): string | undefined {
+/**
+ * A one-line reversal a person can ask for, only where the service can actually do it.
+ * Life Diff does not run the reversal.
+ */
+export function reversalHint(action: Pick<RecordedAction, "tool" | "upstream" | "verb" | "tone" | "effect">): string | undefined {
   const write = action.effect === "write" || action.tone === "created" || action.tone === "changed" || action.tone === "removed";
   if (!write) return undefined;
-  if (action.tone === "removed" || action.verb === "send" || action.verb === "delete" || action.verb === "remove") {
-    return undefined;
+  const tool = action.tool.toLowerCase();
+  const upstream = action.upstream.toLowerCase().replace(/[\s-]+/g, "_");
+  if (tool.includes("send") || action.verb === "send") return undefined;
+  if (tool.includes("commit") && (action.tone === "created" || tool.includes("create"))) return "Revert this commit";
+  if ((tool.includes("close_issue") || tool.includes("close_pull") || (tool.includes("close") && tool.includes("issue")))) return "Reopen";
+  if ((upstream.includes("calendar") || tool.includes("event")) && (action.tone === "created" || tool.includes("create") || action.verb === "create")) {
+    return "Delete this event";
   }
-  if (action.tone === "created" || action.verb === "create" || action.verb === "add" || action.verb === "insert") {
-    const subject = pickSubject(action.arguments) || "it";
-    const id = findId(action.arguments) ?? findId(action.result);
-    const tool = `${action.upstream}__${inverseTool(action.tool)}`;
-    const what = id ? `"${subject}" (${id})` : `"${subject}"`;
-    return `Undo: delete ${what} via ${tool}.`;
-  }
-  if (action.tone === "changed" || action.verb === "update" || action.verb === "edit" || action.verb === "patch" || action.verb === "set") {
-    const prior = priorPhrase(action.arguments);
-    if (prior) return `Undo: restore ${prior} via ${action.upstream}__${action.tool}.`;
-    return undefined;
+  if ((upstream.includes("drive") || tool.includes("file")) && (action.tone === "created" || tool.includes("create") || action.verb === "create")) {
+    return "Move this file to trash";
   }
   return undefined;
 }
 
-function inverseTool(name: string): string {
-  if (name.startsWith("create_")) return `delete_${name.slice("create_".length)}`;
-  if (name.startsWith("add_")) return `remove_${name.slice("add_".length)}`;
-  if (name.startsWith("insert_")) return `delete_${name.slice("insert_".length)}`;
-  if (name.includes("create")) return name.replace("create", "delete");
-  if (name.includes("add")) return name.replace("add", "remove");
-  return `delete_${name}`;
-}
-
-function findId(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const quoted = value.match(/"id"\s*:\s*"([^"]+)"/);
-    if (quoted?.[1] && quoted[1] !== "[redacted]") return quoted[1].slice(0, 80);
-    return undefined;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  for (const key of ["id", "eventId", "event_id", "messageId", "pageId", "resourceId"]) {
-    const item = record[key];
-    if (typeof item === "string" && item.trim() && item !== "[redacted]") return item.trim().slice(0, 80);
-    if (typeof item === "number" && Number.isFinite(item)) return String(item);
-  }
-  return undefined;
-}
-
-function priorPhrase(value: unknown): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  for (const key of ["previous", "prior", "before", "old"]) {
-    const item = record[key];
-    if (typeof item === "string" && item.trim()) return `"${item.trim().slice(0, 80)}"`;
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      const parts = Object.entries(item as Record<string, unknown>)
-        .filter((entry): entry is [string, string | number] => typeof entry[1] === "string" || typeof entry[1] === "number")
-        .slice(0, 4)
-        .map(([field, fieldValue]) => `${field} “${String(fieldValue).slice(0, 40)}”`);
-      if (parts.length > 0) return parts.join(", ");
-    }
+export function reversalForChange(change: Pick<Change, "resourceType" | "kind" | "summary" | "fields">): string | undefined {
+  const status = change.fields.find((field) => field.field === "status")?.after;
+  if (change.resourceType === "commit" && change.kind === "added") return "Revert this commit";
+  if ((change.resourceType === "issue" || change.resourceType === "pull_request") && (status === "closed" || change.summary.startsWith("Closed "))) {
+    return "Reopen";
   }
   return undefined;
 }

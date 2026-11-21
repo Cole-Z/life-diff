@@ -221,26 +221,41 @@ export class D1MetadataStore implements MetadataStore {
 
   async getSettings(userId: string): Promise<UserSettings> {
     const row = await this.db.prepare(
-      `SELECT time_zone, day_end, github_daily FROM user_settings WHERE user_id = ?`,
-    ).bind(userId).first<{ time_zone: string; day_end: string; github_daily: number }>();
+      `SELECT time_zone, day_end, github_daily, idle_minutes, quiet_days, last_viewed_at FROM user_settings WHERE user_id = ?`,
+    ).bind(userId).first<{ time_zone: string; day_end: string; github_daily: number; idle_minutes: number; quiet_days: number; last_viewed_at: string | null }>();
     if (!row) return { ...DEFAULT_SETTINGS };
     return {
       timeZone: validTimeZone(row.time_zone) ? row.time_zone : DEFAULT_SETTINGS.timeZone,
       dayEnd: parseDayEnd(row.day_end) ? row.day_end : DEFAULT_SETTINGS.dayEnd,
       githubDaily: row.github_daily === 1,
+      idleMinutes: clampStoredIdle(row.idle_minutes),
+      quietDays: row.quiet_days === 1,
+      ...(row.last_viewed_at ? { lastViewedAt: row.last_viewed_at } : {}),
     };
   }
 
   async saveSettings(userId: string, settings: UserSettings, now: string): Promise<void> {
     await this.db.prepare(
-      `INSERT INTO user_settings (user_id, time_zone, day_end, github_daily, updated_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO user_settings (user_id, time_zone, day_end, github_daily, idle_minutes, quiet_days, last_viewed_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id) DO UPDATE SET
          time_zone = excluded.time_zone,
          day_end = excluded.day_end,
          github_daily = excluded.github_daily,
+         idle_minutes = excluded.idle_minutes,
+         quiet_days = excluded.quiet_days,
+         last_viewed_at = excluded.last_viewed_at,
          updated_at = excluded.updated_at`,
-    ).bind(userId, settings.timeZone, settings.dayEnd, settings.githubDaily ? 1 : 0, now).run();
+    ).bind(
+      userId,
+      settings.timeZone,
+      settings.dayEnd,
+      settings.githubDaily ? 1 : 0,
+      clampStoredIdle(settings.idleMinutes),
+      settings.quietDays ? 1 : 0,
+      settings.lastViewedAt ?? null,
+      now,
+    ).run();
   }
 
   async listUsers(): Promise<{ id: string; login: string }[]> {
@@ -404,4 +419,9 @@ function receiptMeta(row: ReceiptSql): ReceiptMeta {
     missingClaims: row.missing_claims,
     unclaimedChanges: row.unclaimed_changes,
   };
+}
+
+function clampStoredIdle(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_SETTINGS.idleMinutes;
+  return Math.min(180, Math.max(5, Math.round(value)));
 }

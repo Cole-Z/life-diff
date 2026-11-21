@@ -40,15 +40,14 @@ describe("headlines", () => {
     expect(headlineFor([read, read], "Today")).toBe("Nothing changed · 2 lookups");
     expect(headlineFor([read, read], "This session")).toBe("Nothing changed · 2 lookups");
     expect(headlineFor([read], "This session")).toBe("Nothing changed · 1 lookup");
-    expect(headlineFor([write, failed], "This session")).toBe("1 change · 1 failed");
-    expect(headlineFor([failed], "Today")).toBe("1 failed call");
-    expect(headlineFor([failed, failed], "Today")).toBe("2 failed calls");
-    expect(headlineFor([write, write], "Today")).toBe("2 changes");
-    expect(headlineFor([write, failed], "Today")).toBe("1 change · 1 failed");
+    expect(headlineFor([write, failed], "This session")).toBe("+1 added · 1 failed");
+    expect(headlineFor([failed], "Today")).toBe("1 failed");
+    expect(headlineFor([failed, failed], "Today")).toBe("2 failed");
+    expect(headlineFor([write, write], "Today")).toBe("+2 added");
+    expect(headlineFor([write, failed], "Today")).toBe("+1 added · 1 failed");
     const claim = { ...write, source: "claim" as const, summary: "Moved the call" };
-    expect(headlineFor([claim, failed], "This session")).toBe("1 change needs a look · 1 failed");
-    expect(headlineFor([claim, failed], "Today")).toBe("1 change needs a look · 1 failed");
-    expect(headlineFor([write, write, claim, failed, failed], "Today")).toBe("3 changes, 1 needs a look · 2 failed");
+    expect(headlineFor([claim, failed], "This session")).toBe("+1 added · 1 failed");
+    expect(headlineFor([write, write, claim, failed, failed], "Today")).toBe("+3 added · 2 failed");
   });
 });
 
@@ -73,13 +72,10 @@ describe("badges and grouping", () => {
       link: "https://lifediff.dev/roundup/2026-04-02",
       linkLabel: "Full day",
     });
-    expect(markdown.startsWith("1 change\n")).toBe(true);
-    expect(markdown).toContain("**GitHub**");
-    expect(markdown).toContain("cole-z/cardpost: 1 issue by Grok Bot");
+    expect(markdown.startsWith("TODAY\n")).toBe(true);
+    expect(markdown).toContain("+ Added · GitHub · Agent said · Grok Bot");
     expect(markdown).toContain("Created issue #12 'Fix login' in cole-z/cardpost");
-    expect(markdown).toContain("Sent to GitHub, not verified");
     expect(markdown).not.toContain("Agent says it did this, not verified");
-    expect(markdown).toContain("**Notes**");
     expect(markdown).toContain("1 lookup");
     expect(markdown).not.toContain("create_issue");
     expect(markdown).not.toContain("list_pages");
@@ -110,7 +106,7 @@ describe("badges and grouping", () => {
       linkLabel: "Full receipt",
     });
     expect(markdown).toContain("Agent said it closed #4, but GitHub shows it still open.");
-    expect(markdown).toContain("Verified in GitHub");
+    expect(markdown).toContain("Verified");
   });
 });
 
@@ -125,7 +121,10 @@ describe("logged reads", () => {
     expect(schema.safeParse({ sessionId: "ses_1", tool: "deepwiki", action: "read", target: "x" }).success).toBe(true);
     expect(schema.safeParse({ sessionId: "ses_1", tool: "deepwiki", action: "nope", target: "x" }).success).toBe(false);
     expect(validateAction({ tool: "deepwiki", action: "read", target: "x" }).action).toBe("read");
-    expect(() => validateAction({ tool: "deepwiki", action: "nope", target: "x" })).toThrow(/added, removed, modified, or read/);
+    expect(() => validateAction({ tool: "deepwiki", action: "nope", target: "x" })).toThrow(/added, removed, modified, moved, shared, or read/);
+    expect(validateAction({ tool: "google_calendar", action: "moved", target: "Standup" }).action).toBe("moved");
+    expect(validateAction({ tool: "google_drive", action: "share", target: "Budget" }).action).toBe("shared");
+    expect(validateAction({ tool: "google_drive", action: "trash", target: "Old" }).action).toBe("removed");
 
     const book = new SessionBook();
     const deps = base(book);
@@ -142,7 +141,7 @@ describe("logged reads", () => {
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
     expect(lines.find((item) => item.tone === "read")?.readCount).toBe(1);
     expect(lines.find((item) => item.tone === "read")?.summary).toBe("1 lookup");
-    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Agent says it did this, not verified");
+    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Agent said");
     expect(JSON.stringify(lines)).not.toContain("deepwiki__");
   });
 });
@@ -194,10 +193,10 @@ describe("claim corroboration", () => {
     })]);
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
     expect(lines.find((item) => item.tone === "read")?.readCount).toBe(2);
-    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Sent to DeepWiki, not verified");
+    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Agent said");
     const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
     expect(day.markdown).toBe("Nothing changed · 2 lookups");
-    expect(day.lines.find((item) => item.tone === "read")?.trust).toBe("Sent to DeepWiki, not verified");
+    expect(day.lines.find((item) => item.tone === "read")?.trust).toBe("Agent said");
     expect(day.markdown).not.toContain("3 lookups");
     expect(day.markdown).not.toContain("Agent says it did this, not verified");
   });
@@ -225,7 +224,8 @@ describe("claim corroboration", () => {
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
     const reads = lines.filter((item) => item.tone === "read");
     expect(reads).toHaveLength(2);
-    expect(reads.map((item) => item.trust)).toEqual(["Sent to DeepWiki, not verified", "Agent says it did this, not verified"]);
+    expect(reads.map((item) => item.source)).toEqual(["proxy", "claim"]);
+    expect(reads.map((item) => item.trust)).toEqual(["Agent said", "Agent said"]);
     expect(reads.reduce((sum, item) => sum + (item.readCount ?? 1), 0)).toBe(2);
   });
 });
@@ -427,10 +427,10 @@ function seesCaption(rgb: Uint8Array, width: number, text: string): boolean {
       const bits = rows[row] ?? 0;
       for (let col = 0; col < 5; col += 1) {
         if ((bits & (1 << (4 - col))) === 0) continue;
-        const px = 20 + index * advance + col * 2;
-        const py = 40 + row * 2;
+        const px = 32 + index * advance + col * 2;
+        const py = 28 + row * 2;
         const at = (py * width + px) * 3;
-        if (rgb[at] === 246 && rgb[at + 1] === 241 && rgb[at + 2] === 231) found = true;
+        if (rgb[at] === 163 && rgb[at + 1] === 152 && rgb[at + 2] === 136) found = true;
       }
     }
     if (!found) return false;

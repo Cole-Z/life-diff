@@ -98,7 +98,10 @@ export interface Counts {
 }
 
 export type ActionEffect = "read" | "write" | "unknown";
-export type ActionTone = "created" | "changed" | "removed" | "read" | "unknown";
+export type ActionTone = "created" | "changed" | "removed" | "moved" | "shared" | "read" | "unknown";
+
+/** Claim and log_action kinds. GitHub resource diffs stay added, removed, or modified. */
+export type ClaimAction = ChangeKind | "moved" | "shared";
 
 export interface RecordedAction {
   id: string;

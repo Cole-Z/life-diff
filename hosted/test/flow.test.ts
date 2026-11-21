@@ -103,7 +103,7 @@ describe("session flow", () => {
     expect(ended.receipt.claimsChecked).toBe(true);
     expect(ended.receipt.claims[0]?.status).toBe("verified");
     expect(ended.receipt.claims[0]?.detail).toContain("github.create_file");
-    expect(ended.html).toContain("badge-added");
+    expect(ended.html).toContain("kind-added");
     expect(objects.objects.size).toBeGreaterThan(1);
     const keys = await meta.userObjectKeys("42");
     await deleteUserData({

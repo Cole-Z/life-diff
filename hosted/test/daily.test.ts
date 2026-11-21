@@ -52,7 +52,7 @@ describe("card glyphs", () => {
   it("folds a curly quote onto the straight quote the font has", async () => {
     expect(glyphRows("“")).toEqual(glyphRows('"'));
     expect(glyphRows("“")).not.toEqual(glyphRows("?"));
-    const line = { service: "deepwiki", source: "proxy" as const, write: false, tone: "read" as const, seed: "card", summary: "" };
+    const line = { service: "deepwiki", source: "proxy" as const, write: true, tone: "created" as const, seed: "card", summary: "" };
     const curly = await renderCardPng([{ ...line, summary: "Asked “how”." }], "Life Diff", "This session");
     const straight = await renderCardPng([{ ...line, summary: "Asked \"how\"." }], "Life Diff", "This session");
     const marks = await renderCardPng([{ ...line, summary: "Asked ?how?." }], "Life Diff", "This session");
@@ -110,7 +110,7 @@ describe("the local day", () => {
     expect(shown.markdown).toContain("acme/app");
   });
 
-  it("keeps one heading when lookups for a repository are not consecutive", async () => {
+  it("keeps one repository's lookups together when they are not consecutive", async () => {
     const store = new MemoryMetadataStore();
     const objects = new MemoryObjectStore();
     const book = new SessionBook();
@@ -149,14 +149,15 @@ describe("the local day", () => {
     }
     await endSession(deps, {});
     const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false, detail: true });
-    const headings = day.markdown.split("\n").map((line) => line.trim()).filter((line) => line === "facebook/react");
-    expect(headings).toEqual(["facebook/react"]);
+    const reactAt = day.markdown.indexOf("facebook/react");
+    const secondReact = day.markdown.indexOf("facebook/react", reactAt + 1);
+    const thirdReact = day.markdown.indexOf("facebook/react", secondReact + 1);
     const vueAt = day.markdown.indexOf("vuejs/core");
-    const beforeVue = day.markdown.slice(0, vueAt);
-    expect(beforeVue.split("facebook/react").length - 1).toBe(3);
-    const repoHeads = [...day.html.matchAll(/class="repo">([^<]+)/g)].map((match) => match[1]);
-    expect(repoHeads.filter((head) => head === "facebook/react")).toEqual(["facebook/react"]);
-    expect(repoHeads.indexOf("facebook/react")).toBeLessThan(repoHeads.indexOf("vuejs/core"));
+    expect(reactAt).toBeGreaterThan(-1);
+    expect(secondReact).toBeGreaterThan(reactAt);
+    expect(thirdReact).toBeGreaterThan(secondReact);
+    expect(vueAt).toBeGreaterThan(thirdReact);
+    expect(day.markdown.split("facebook/react").length - 1).toBe(3);
   });
 
   it("groups each lookup under its own repo, and leaves a line with no repo under Other", async () => {

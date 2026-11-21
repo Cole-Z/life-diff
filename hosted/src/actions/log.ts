@@ -4,7 +4,7 @@ import { publicHttpsLink } from "../receipt/phrase";
 import type { ClaimInput } from "../receipt/types";
 import type { LoggedAction } from "../session/book";
 
-export const ACTION_VALUES = ["added", "removed", "modified", "read"] as const;
+export const ACTION_VALUES = ["added", "removed", "modified", "moved", "shared", "read"] as const;
 
 const RESOURCES = new Set(["commit", "branch", "pull_request", "issue", "comment", "label", "file"]);
 
@@ -34,7 +34,7 @@ export function validateAction(input: ActionInput): { action?: string; resource?
     if (folded === "read") action = "read";
     else {
       const normalized = normalizeAction(input.action);
-      if (!normalized) throw new Error("action must be added, removed, modified, or read");
+      if (!normalized) throw new Error("action must be added, removed, modified, moved, shared, or read");
       action = normalized;
     }
   }

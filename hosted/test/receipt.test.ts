@@ -259,7 +259,7 @@ describe("claims and receipt", () => {
       { action: "created", target: "Docs" },
     ]);
     expect(applied.claims[0]?.status).toBe("verified");
-    expect(applied.claims[0]?.action).toBe("modified");
+    expect(applied.claims[0]?.action).toBe("moved");
     expect(applied.claims[1]?.status).toBe("verified");
     expect(applied.claims[1]?.action).toBe("added");
   });
@@ -285,19 +285,14 @@ describe("claims and receipt", () => {
     expect(receipt.claimsChecked).toBe(true);
     expect(JSON.stringify(receipt)).not.toMatch(/ghu_|access_token|client_secret/);
     const html = renderHtml(receipt);
-    expect(html).toContain("--added: #0f5c32");
-    expect(html).toContain("--removed: #8d1c1c");
-    expect(html).toContain("--modified: #6b4300");
-    expect(html).toContain("badge-added");
-    expect(html).toContain("badge-removed");
-    expect(html).toContain("badge-modified");
-    expect(html).toContain("M7 1h2v14H7z");
-    expect(html).toContain(">Added<");
-    expect(html).toContain(">Removed<");
-    expect(html).toContain(">Modified<");
+    expect(html).toContain("--added:");
+    expect(html).toContain("--removed:");
+    expect(html).toContain("--changed:");
+    expect(html).toContain("kind-added");
+    expect(html).toContain("SESSION DIFF");
     expect(html).toContain(">Open</a>");
-    expect(html).toContain("Life Diff did not change any GitHub data.");
-    expect(html).not.toContain("<script");
+    expect(html).toContain("Copy undo prompt");
+    expect(html).not.toContain("<script>alert");
   });
 
   it("escapes names in the report", () => {

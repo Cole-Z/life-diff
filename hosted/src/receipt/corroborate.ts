@@ -175,6 +175,8 @@ function claimKind(action: LoggedAction): Kind | null {
     case "removed":
       return "removed";
     case "modified":
+    case "moved":
+    case "shared":
       return "modified";
     default:
       break;
@@ -182,12 +184,12 @@ function claimKind(action: LoggedAction): Kind | null {
   if (action.effect === "read" || action.tone === "read") return "read";
   if (action.tone === "created") return "added";
   if (action.tone === "removed") return "removed";
-  if (action.tone === "changed") return "modified";
+  if (action.tone === "changed" || action.tone === "moved" || action.tone === "shared") return "modified";
   return null;
 }
 
 function proxyKind(action: LoggedAction): Kind {
-  if (action.effect === "write" || action.tone === "created" || action.tone === "changed" || action.tone === "removed") {
+  if (action.effect === "write" || action.tone === "created" || action.tone === "changed" || action.tone === "removed" || action.tone === "moved" || action.tone === "shared") {
     if (action.tone === "created") return "added";
     if (action.tone === "removed") return "removed";
     return "modified";

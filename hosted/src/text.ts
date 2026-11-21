@@ -66,6 +66,59 @@ export function formatInstant(iso: string, timeZone: string): string {
   return `${get("weekday")}, ${get("month")} ${get("day")}, ${get("hour")}:${get("minute")} ${get("dayPeriod")}`;
 }
 
+const ZONE_SHORT: Record<string, string> = {
+  CDT: "CT",
+  CST: "CT",
+  PDT: "PT",
+  PST: "PT",
+  EDT: "ET",
+  EST: "ET",
+  MDT: "MT",
+  MST: "MT",
+};
+
+/** A clock range such as `9:02–9:41 AM CT` in the user's zone. */
+export function formatRange(startIso: string, endIso: string, timeZone: string): string {
+  const start = clockParts(startIso, timeZone);
+  const end = clockParts(endIso, timeZone);
+  if (!start || !end) return "";
+  const zone = start.zone || end.zone;
+  const zoneText = zone ? ` ${zone}` : "";
+  if (start.hour === end.hour && start.minute === end.minute && start.meridiem === end.meridiem) {
+    return `${start.hour}:${start.minute} ${start.meridiem}${zoneText}`;
+  }
+  if (start.meridiem === end.meridiem) {
+    return `${start.hour}:${start.minute}–${end.hour}:${end.minute} ${end.meridiem}${zoneText}`;
+  }
+  return `${start.hour}:${start.minute} ${start.meridiem}–${end.hour}:${end.minute} ${end.meridiem}${zoneText}`;
+}
+
+function clockParts(iso: string, timeZone: string): { hour: string; minute: string; meridiem: string; zone: string } | null {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  let zone = timeZone;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: zone });
+  } catch {
+    zone = "UTC";
+  }
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    hour: "numeric",
+    minute: "2-digit",
+    hourCycle: "h12",
+    timeZoneName: "short",
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  const rawZone = get("timeZoneName");
+  return {
+    hour: get("hour"),
+    minute: get("minute"),
+    meridiem: get("dayPeriod").toUpperCase(),
+    zone: ZONE_SHORT[rawZone] ?? rawZone,
+  };
+}
+
 export function validTimeZone(timeZone: string): boolean {
   try {
     Intl.DateTimeFormat(undefined, { timeZone });

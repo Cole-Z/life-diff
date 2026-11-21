@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { appDeps, coreDeps, sessionStub } from "../app/runtime";
 import { ACTION_VALUES } from "../actions/log";
-import { clearHistory, endSession, getReceipt, listReceipts, logAction, startSession, AppError } from "../app/service";
+import { clearHistory, endSession, getReceipt, listReceipts, logAction, requestUndo, startSession, AppError } from "../app/service";
 import type { Env } from "../env";
 import { clientName } from "./client-name";
 import { invalidateUpstreamCache, registerUpstreamTools } from "./upstream-tools";
@@ -13,7 +13,7 @@ import type { ClaimInput } from "../receipt/types";
 import type { GitHubApi } from "../github/types";
 import { getMcpAuthContext } from "agents/mcp/server";
 import { redactText } from "../proxy/redact";
-import { buildRoundup, pngContent, receiptPresentation, sessionToolPayload } from "../receipt/roundup";
+import { buildRoundup, pngContent, receiptPresentation, sessionToolPayload, undoEntries } from "../receipt/roundup";
 
 const claimSchema = z.object({
   id: z.string().optional(),
@@ -63,7 +63,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "log_action",
     {
-      description: "Record a change made outside Life Diff. Do not use this for a read, or for a tool already called through Life Diff. action is added, removed, modified, or read. Optional before and after are the old and new values, such as a moved event's times. Optional url is an https link to the object. Life Diff does not run the tool. A GitHub change is checked only when this session snapshotted GitHub. Anything else is shown as reported, not verified.",
+      description: "Record a change made outside Life Diff. Do not use this for a read, or for a tool already called through Life Diff. action is added, removed, modified, moved, shared, or read. move and rename are moved. share is shared. trash is removed. Optional before and after are the old and new values, such as a moved event's times. Optional url is an https link to the object. Life Diff does not run the tool. A GitHub change is checked only when this session snapshotted GitHub. Anything else is shown as what the agent said.",
       inputSchema: z.object({
         sessionId: z.string().optional(),
         tool: z.string(),
@@ -119,6 +119,33 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
     }),
   );
   server.registerTool(
+    "undo_change",
+    {
+      description: "Return the plain-English undo instruction for one change on a receipt, plus the original tool and arguments when they were stored. Life Diff does not run the undo. Run the suggested call yourself. This records that an undo was requested. It does not mean the undo happened. The next receipt shows the reverse change only after you run it.",
+      inputSchema: z.object({
+        receiptId: z.string(),
+        changeId: z.string(),
+      }),
+    },
+    async (input) => run(async () => {
+      const result = await requestUndo(coreDeps(env, user()), { ...input, origin: env.ISSUER });
+      const first = result.undos[0];
+      return text(first?.prompt ?? "Nothing to undo.", result);
+    }),
+  );
+  server.registerTool(
+    "undo_session",
+    {
+      description: "Return an undo instruction for every change on a receipt. Life Diff does not run them. Run each suggested call yourself. This records that an undo was requested. It does not mean any undo happened.",
+      inputSchema: z.object({ receiptId: z.string() }),
+    },
+    async (input) => run(async () => {
+      const result = await requestUndo(coreDeps(env, user()), { ...input, origin: env.ISSUER });
+      const textBody = result.undos.map((item) => item.prompt).join("\n");
+      return text(textBody || "Nothing to undo.", result);
+    }),
+  );
+  server.registerTool(
     "get_receipt",
     {
       description: "Read one saved Life Diff receipt by id, including its card. Show the returned markdown to the user.",
@@ -141,6 +168,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
         htmlUrl: link,
         ...(shown.imageUrl ? { imageUrl: shown.imageUrl } : {}),
         ...(input.includeHtml ? { html: result.html } : {}),
+        undos: undoEntries(shown.lines, link),
       };
       return shownContent(shown.markdown, shown.png, payload);
     }),
@@ -266,7 +294,9 @@ function dailyHandler(env: Env) {
         tone: line.tone,
         ...(line.trust ? { trust: line.trust } : {}),
         ...(line.id ? { id: line.id } : {}),
-        ...(line.undo ? { undoHint: line.undo } : {}),
+        ...(line.undo ? { undoPrompt: line.undo } : {}),
+        ...(line.id && line.undo ? { changeId: line.id } : {}),
+        ...(line.undoDaysLeft ? { undoDaysLeft: line.undoDaysLeft } : {}),
       })),
     });
   });

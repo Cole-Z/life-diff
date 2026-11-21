@@ -94,7 +94,7 @@ function sentence(service: string, tool: string, classification: Classification,
     return pair(`ask ${service} about ${topic}`, `Asked ${service} about ${topic}`);
   }
   const renamed = renameRest(service, args, subject);
-  if (renamed && (tool.includes("rename") || classification.verb === "update" || classification.verb === "move" || classification.verb === "edit")) {
+  if (renamed && (tool.includes("rename") || classification.verb === "update" || classification.verb === "move" || classification.verb === "rename" || classification.verb === "edit" || classification.tone === "moved")) {
     return pair(`rename ${renamed}`, `Renamed ${renamed}`);
   }
   const place = repoOf(args) || service;
@@ -144,7 +144,10 @@ function writeVerb(classification: Classification, tool: string): string {
   if (name.includes("reopen")) return "reopen";
   if (name.includes("close")) return "close";
   if (name.includes("merge")) return "merge";
-  if (classification.verb === "delete" || classification.verb === "remove" || classification.tone === "removed") return "delete";
+  if (classification.verb === "delete" || classification.verb === "remove" || classification.verb === "trash" || classification.tone === "removed") return "delete";
+  if (classification.tone === "moved" || classification.verb === "move") return "move";
+  if (classification.verb === "rename") return "rename";
+  if (classification.tone === "shared" || classification.verb === "share") return "share";
   if (classification.tone === "created" || classification.verb === "create" || classification.verb === "add" || classification.verb === "insert") return "create";
   return "change";
 }

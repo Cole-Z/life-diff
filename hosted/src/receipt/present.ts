@@ -1,17 +1,14 @@
 import { classifyToolName, type Classification } from "../proxy/classify";
 import { lineRepo, phraseAction, safeLink } from "./phrase";
-import { reversalHint } from "./undo";
 import type { ActionTone, RecordedAction } from "./types";
 
 export interface PresentedAction {
-  tone: "created" | "changed" | "removed" | "read" | "failed";
+  tone: "created" | "changed" | "removed" | "moved" | "shared" | "read" | "failed";
   effect: "read" | "write";
   summary: string;
   write: boolean;
   repo?: string;
   link?: string;
-  hint?: string;
-  undoable?: boolean;
   before?: string;
   after?: string;
   client?: string;
@@ -57,32 +54,58 @@ export function presentAction(action: RecordedAction): PresentedAction {
       ...(action.error ? { error: action.error } : {}),
     });
   const write = !failed && classification.effect === "write";
-  const undoable = write && Boolean(reversalHint({ ...action, effect: classification.effect, tone: classification.tone }));
   const link = safeLink(action.arguments, action.result);
   const repo = lineRepo({ ...(action.repo ? { repo: action.repo } : {}), arguments: action.arguments, summary: action.summary });
   return {
-    tone: failed ? "failed" : classification.tone === "unknown" ? "read" : classification.tone,
+    tone: failed ? "failed" : classification.tone === "unknown" ? "read" : presentedTone(classification),
     effect: classification.effect === "write" ? "write" : "read",
     summary,
     write,
     ...(repo ? { repo } : {}),
     ...(link ? { link } : {}),
-    ...(write ? { hint: undoable ? "Undo available" : "Undo not available yet", undoable } : {}),
     ...(span.before ? { before: span.before } : {}),
     ...(span.after ? { after: span.after } : {}),
     ...(action.client ? { client: action.client } : {}),
   };
 }
 
+/** Older stored calls kept move and share on the changed or removed tone. The verb still decides the row. */
+function presentedTone(classification: Classification): PresentedAction["tone"] {
+  if (classification.verb === "move" || classification.verb === "rename") return "moved";
+  if (classification.verb === "share") return "shared";
+  if (classification.verb === "trash") return "removed";
+  if (classification.tone === "unknown") return "read";
+  return classification.tone;
+}
+
 /** One plain line for a change the agent reported, using the target and any before/after. */
 export function claimSentence(input: ClaimSentenceInput): string {
   const title = clean(input.target);
   const detail = publicDetail(input.detail);
-  if (input.before && input.after) {
-    return `${claimVerb(input, title)} "${title}" · ${input.before} → ${input.after}`;
+  const verb = (input.verb ?? "").toLowerCase();
+  const blob = `${verb} ${input.tool} ${title}`.toLowerCase();
+  if (input.before && input.after && (verb === "move" || verb === "rename" || input.tone === "moved" || looksLikeWhen(input.before) || looksLikeWhen(input.after))) {
+    if (verb === "rename" || /\brenam/.test(blob)) return `${title} renamed ${input.before} → ${input.after}`;
+    return `${title} moved ${input.before} → ${input.after}`;
   }
-  const base = looksLikeSentence(title) ? title.replace(/\.$/, "") : `${claimVerb(input, title)} "${title}"`;
-  if (detail && !base.includes(detail)) return `${base} · ${detail}`;
+  if (input.tone === "shared" || verb === "share" || /\bshare/.test(blob)) {
+    return `${title} shared with ${input.after || "a new person"}`;
+  }
+  if (input.tone === "created" || /\b(add|added|create|created)\b/.test(blob)) {
+    return input.after ? `${title} added, ${input.after}` : looksLikeSentence(title) ? title.replace(/\.$/, "") : `${title} added`;
+  }
+  if (verb === "trash" || /\btrash/.test(blob)) return `${title} moved to trash`;
+  if (input.tone === "removed" || /\b(delete|deleted|remove|removed)\b/.test(blob)) {
+    return looksLikeSentence(title) ? title.replace(/\.$/, "") : `${title} removed`;
+  }
+  if (input.before && input.after) return `${title} changed ${input.before} → ${input.after}`;
+  if (looksLikeSentence(title)) {
+    const base = title.replace(/\.$/, "");
+    if (detail && !base.includes(detail)) return `${base}, ${detail}`;
+    return base;
+  }
+  const base = `${claimVerb(input, title)} ${title}`;
+  if (detail && !base.includes(detail)) return `${base}, ${detail}`;
   return base;
 }
 
@@ -131,20 +154,30 @@ function spanOf(value: unknown): { subject?: string; detail?: string; before?: s
 
 function reclassify(action: RecordedAction): Classification {
   const fresh = classifyToolName(action.tool);
-  if (fresh.effect === "write") return fresh;
-  if (fresh.effect === "read") return fresh;
+  const specific = specificStored(action);
+  // A logged move, share, or trash wins over a generic update in the tool name.
+  if (specific && (fresh.effect !== "write" || fresh.tone === "changed")) return specific;
+  if (fresh.effect === "write" || fresh.effect === "read") return fresh;
   if (isStoredWrite(action.effect, action.tone)) {
     return {
       effect: "write",
-      tone: action.tone === "created" || action.tone === "changed" || action.tone === "removed" ? action.tone : "changed",
+      tone: action.tone === "created" || action.tone === "changed" || action.tone === "removed" || action.tone === "moved" || action.tone === "shared" ? action.tone : "changed",
       ...(action.verb ? { verb: action.verb } : {}),
     };
   }
   return { effect: "read", tone: "read" };
 }
 
+function specificStored(action: RecordedAction): Classification | undefined {
+  if (action.verb === "rename") return { effect: "write", tone: "moved", verb: "rename" };
+  if (action.verb === "move" || action.tone === "moved") return { effect: "write", tone: "moved", verb: "move" };
+  if (action.verb === "share" || action.tone === "shared") return { effect: "write", tone: "shared", verb: "share" };
+  if (action.verb === "trash") return { effect: "write", tone: "removed", verb: "trash" };
+  return undefined;
+}
+
 function isStoredWrite(effect: RecordedAction["effect"], tone: ActionTone): boolean {
-  return effect === "write" && (tone === "created" || tone === "changed" || tone === "removed");
+  return effect === "write" && (tone === "created" || tone === "changed" || tone === "removed" || tone === "moved" || tone === "shared");
 }
 
 /** Pull a quoted subject out of an old stored sentence when the arguments no longer have it. */

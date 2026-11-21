@@ -1,14 +1,14 @@
 import { redactText } from "../proxy/redact";
-import { assertNever } from "../text";
+import { assertNever, formatRange } from "../text";
 import { dedupeStoredReads } from "./corroborate";
-import { serviceForClaim } from "./claims";
-import { displayName } from "./names";
+import { isGitHubClaimService, serviceForClaim } from "./claims";
+import { displayName, shortService } from "./names";
 import { lineRepo } from "./phrase";
 import { claimSentence, presentAction } from "./present";
-import { reversalForChange } from "./undo";
+import { planFromAction, undoForChange, undoLabel, type UndoPlan } from "./undo";
 import type { Change, ClaimResult, Receipt, RecordedAction } from "./types";
 
-export type StoryTone = "created" | "changed" | "removed" | "read" | "failed" | "unknown" | "note";
+export type StoryTone = "created" | "changed" | "removed" | "moved" | "shared" | "read" | "failed" | "unknown" | "note" | "not_found" | "not_checked";
 
 export interface StoryDetail {
   text: string;
@@ -18,15 +18,14 @@ export interface StoryDetail {
 
 export type LineSource = "proxy" | "claim" | "verified";
 
-export function trustLabel(source: LineSource, service: string): string {
-  const name = displayName(service);
+/** Short tag for a row. The longer definitions stay in the receipt notes. */
+export function trustLabel(source: LineSource, _service: string): string {
   switch (source) {
     case "proxy":
-      return `Sent to ${name}, not verified`;
     case "claim":
-      return "Agent says it did this, not verified";
+      return "Agent said";
     case "verified":
-      return `Verified in ${name}`;
+      return "Verified";
     default: {
       const never: never = source;
       return never;
@@ -43,6 +42,14 @@ export interface StoryLine {
   seed: string;
   time?: string;
   undo?: string;
+  undoTool?: string;
+  undoArguments?: Record<string, unknown>;
+  undoSuggestedTool?: string;
+  undoSuggestedArguments?: Record<string, unknown>;
+  undoDaysLeft?: number;
+  /** Set when a verified change matched something the agent claimed. */
+  claimed?: boolean;
+  receiptId?: string;
   id?: string;
   details?: StoryDetail[];
   link?: string;
@@ -67,12 +74,13 @@ export function visibleActions(receipt: Pick<Receipt, "actions" | "claims">): Re
 
 export function storyFromReceipt(receipt: Receipt): StoryLine[] {
   const actions = visibleActions(receipt);
-  return [
+  const lines = [
     ...storyFromActions(actions),
     ...storyFromChanges(receipt.id, receipt.changes),
     ...storyFromUnverifiedClaims(receipt.claims, new Set(actions.map((action) => action.id))),
     ...mismatchLines(actions, receipt.changes),
-  ];
+  ].map((line) => ({ ...line, receiptId: line.receiptId ?? receipt.id }));
+  return markUnmatched(lines, receipt.claims);
 }
 
 export function storyFromActions(actions: RecordedAction[]): StoryLine[] {
@@ -126,87 +134,87 @@ export function renderStory(input: {
   linkLabel: string;
   imageUrl?: string;
   maxLines?: number;
+  eyebrow?: string;
+  title?: string;
+  footer?: string;
+  timeZone?: string;
+  startedAt?: string;
+  endedAt?: string;
+  detail?: boolean;
 }): string {
   const max = input.maxLines ?? MAX_CHAT_LINES;
   const notes = input.lines.filter((line) => line.tone === "note");
-  const bodyAll = input.lines.filter((line) => line.tone !== "note");
+  const showReads = input.detail === true;
+  const bodyAll = input.lines.filter((line) => line.tone !== "note" && (showReads || line.tone !== "read"));
   const visible = Number.isFinite(max) ? bodyAll.slice(0, max) : bodyAll;
   const body = coalesceRepos(visible);
   const hidden = bodyAll.length - visible.length;
-  const showReadTrust = lookupSourcesMixed(bodyAll);
-  const clients = new Set(body.map((line) => line.client).filter((client): client is string => Boolean(client)));
+  const clients = new Set(input.lines.map((line) => line.client).filter((client): client is string => Boolean(client)));
   const showClient = clients.size > 1;
-  const parts = [input.headline, ""];
-  const services = new Map<string, StoryLine[]>();
-  for (const line of body) {
-    const list = services.get(line.service) ?? [];
-    list.push(line);
-    services.set(line.service, list);
-  }
+  const eyebrow = input.eyebrow ?? (input.link.includes("/roundup") || /day/i.test(input.linkLabel) ? "TODAY" : "SESSION DIFF");
+  const title = input.title ?? agentTitle(input.lines, input.timeZone, input.startedAt, input.endedAt);
+  const chips = summaryText(input.lines);
+  const parts = [eyebrow, title];
+  if (chips) parts.push("", chips);
+  parts.push("");
   let index = 0;
-  for (const [service, lines] of services) {
+  for (const [service, lines] of linesByService(body)) {
     if (index > 0) parts.push("");
     index += 1;
-    parts.push(`**${serviceLabel(service)}**`);
+    parts.push(`**${service}**`);
     for (const group of repoGroups(lines)) {
-      if (group.heading === "Other") parts.push("Other");
-      else if (group.heading) parts.push(repoHeading(group.heading, group.lines, showClient));
-      for (const line of group.lines) parts.push(formatLine(line, showClient && !line.repo, showReadTrust));
+      if (group.heading) parts.push(group.heading);
+      for (const line of group.lines) {
+        parts.push(...formatChange(line, input.link, showClient));
+        parts.push("");
+      }
     }
   }
-  if (hidden > 0) parts.push(`+${hidden} more`);
+  if (hidden > 0) parts.push(`+${hidden} more`, "");
+  const footer = input.footer ?? footerFor(input.lines);
+  if (footer) parts.push(footer);
   for (const note of notes) {
     parts.push("", note.summary.endsWith(".") ? note.summary : `${note.summary}.`);
   }
   parts.push("", `${input.linkLabel}: ${input.link}`);
-  return redactText(parts.join("\n"));
+  return redactText(parts.join("\n").replace(/\n{3,}/g, "\n\n"));
 }
 
-/** Session receipts and the daily page use the same wording. `label` is the card caption, not this line. */
+/** Quiet sessions stay one line. Anything else is the colored count line, such as `+1 added  ~1 changed`. */
 export function headlineFor(lines: StoryLine[], _label: string): string {
-  let changed = 0;
-  let reported = 0;
-  let failed = 0;
-  let reads = 0;
-  for (const line of lines) {
-    if (line.tone === "note" || line.tone === "unknown") continue;
-    if (line.tone === "read") {
-      reads += line.readCount ?? 1;
-      continue;
+  if (isQuiet(lines)) {
+    let reads = 0;
+    for (const line of lines) {
+      if (line.tone === "read") reads += line.readCount ?? 1;
     }
-    if (line.tone === "failed") {
-      failed += 1;
-      continue;
-    }
-    if (line.source === "claim") {
-      reported += 1;
-      continue;
-    }
-    if (line.tone === "created" || line.tone === "changed" || line.tone === "removed") changed += 1;
-  }
-  if (changed === 0 && failed === 0 && reported === 0) {
     if (reads === 0) return "Nothing changed";
-    const noun = reads === 1 ? "lookup" : "lookups";
-    return `Nothing changed · ${reads} ${noun}`;
+    return `Nothing changed · ${reads === 1 ? "1 lookup" : `${reads} lookups`}`;
   }
-  if (changed === 0 && reported === 0) return failed === 1 ? "1 failed call" : `${failed} failed calls`;
-  const total = changed + reported;
-  let headline: string;
-  if (reported === 0) headline = total === 1 ? "1 change" : `${total} changes`;
-  else if (changed === 0) headline = total === 1 ? "1 change needs a look" : `${total} changes need a look`;
-  else {
-    const changes = total === 1 ? "1 change" : `${total} changes`;
-    const lookText = reported === 1 ? "1 needs a look" : `${reported} need a look`;
-    headline = `${changes}, ${lookText}`;
+  const chips = summaryText(lines);
+  const failed = lines.filter((line) => line.tone === "failed").length;
+  const failedText = failed === 0 ? "" : failed === 1 ? "1 failed" : `${failed} failed`;
+  const headline = [chips, failedText].filter(Boolean).join(" · ");
+  if (headline) return headline;
+  const footer = footerFor(lines);
+  return footer || "Nothing changed";
+}
+
+export function agentTitle(lines: StoryLine[], timeZone?: string, startedAt?: string, endedAt?: string): string {
+  const names = [...new Set(lines.map((line) => line.client).filter((client): client is string => Boolean(client)))];
+  const who = names.length === 0 ? "Agent" : names.join(", ");
+  const times = lines.map((line) => line.time).filter((time): time is string => Boolean(time)).sort();
+  const start = startedAt || times[0];
+  const end = endedAt || times[times.length - 1];
+  if (start && end && timeZone) {
+    const range = formatRange(start, end, timeZone);
+    if (range) return `${who} · ${range}`;
   }
-  if (failed === 0) return headline;
-  const failedText = failed === 1 ? "1 failed" : `${failed} failed`;
-  return `${headline} · ${failedText}`;
+  return who;
 }
 
 /** Nothing was changed, claimed, or failed. The chat text is the headline alone, unless detail is on or lookup sources are mixed. */
 export function isQuiet(lines: StoryLine[]): boolean {
-  return lines.every((line) => line.tone === "read" || line.tone === "note" || line.tone === "unknown");
+  return lines.every((line) => line.tone === "read" || line.tone === "unknown" || (line.tone === "note" && !/^Undo requested\b/.test(line.summary)));
 }
 
 export function chatText(input: {
@@ -215,14 +223,18 @@ export function chatText(input: {
   link: string;
   linkLabel: string;
   detail?: boolean;
+  eyebrow?: string;
+  title?: string;
+  timeZone?: string;
+  startedAt?: string;
+  endedAt?: string;
 }): { markdown: string; quiet: boolean } {
   const quiet = isQuiet(input.lines);
-  const mixed = lookupSourcesMixed(input.lines);
-  if (quiet && input.detail !== true && !mixed) return { markdown: input.headline, quiet: true };
+  if (quiet && input.detail !== true) return { markdown: input.headline, quiet: true };
   return {
     markdown: renderStory({
       ...input,
-      ...(input.detail === true ? { maxLines: Number.POSITIVE_INFINITY } : {}),
+      ...(input.detail === true ? { maxLines: Number.POSITIVE_INFINITY, detail: true } : {}),
     }),
     quiet,
   };
@@ -237,8 +249,8 @@ export function lookupSourcesMixed(lines: StoryLine[]): boolean {
   return sources.size > 1;
 }
 
-export function countStory(lines: StoryLine[]): { added: number; removed: number; modified: number; reads: number; failed: number } {
-  const counts = { added: 0, removed: 0, modified: 0, reads: 0, failed: 0 };
+export function countStory(lines: StoryLine[]): { added: number; removed: number; modified: number; moved: number; shared: number; reads: number; failed: number } {
+  const counts = { added: 0, removed: 0, modified: 0, moved: 0, shared: 0, reads: 0, failed: 0 };
   for (const line of lines) {
     switch (line.tone) {
       case "created":
@@ -250,6 +262,12 @@ export function countStory(lines: StoryLine[]): { added: number; removed: number
       case "removed":
         counts.removed += 1;
         break;
+      case "moved":
+        counts.moved += 1;
+        break;
+      case "shared":
+        counts.shared += 1;
+        break;
       case "failed":
         counts.failed += 1;
         break;
@@ -258,6 +276,8 @@ export function countStory(lines: StoryLine[]): { added: number; removed: number
         break;
       case "unknown":
       case "note":
+      case "not_found":
+      case "not_checked":
         break;
       default:
         assertNever(line.tone, "story tone");
@@ -266,19 +286,142 @@ export function countStory(lines: StoryLine[]): { added: number; removed: number
   return counts;
 }
 
+const CHIP_ORDER = ["added", "changed", "removed", "moved", "shared"] as const;
+type ChipKind = (typeof CHIP_ORDER)[number];
+
+const CHIP_SYMBOL: Record<ChipKind, string> = {
+  added: "+",
+  changed: "~",
+  removed: "−",
+  moved: "→",
+  shared: "↗",
+};
+
+const CHIP_LABEL: Record<ChipKind, string> = {
+  added: "added",
+  changed: "changed",
+  removed: "removed",
+  moved: "moved",
+  shared: "shared",
+};
+
+export interface SummaryChip {
+  kind: ChipKind;
+  count: number;
+  symbol: string;
+  label: string;
+}
+
+/** Nonzero kind counts, in the order the card shows them. */
+export function summaryChips(lines: StoryLine[]): SummaryChip[] {
+  const counts: Record<ChipKind, number> = { added: 0, changed: 0, removed: 0, moved: 0, shared: 0 };
+  for (const line of lines) {
+    const kind = chipKind(line);
+    if (kind) counts[kind] += 1;
+  }
+  return CHIP_ORDER.filter((kind) => counts[kind] > 0).map((kind) => ({
+    kind,
+    count: counts[kind],
+    symbol: CHIP_SYMBOL[kind],
+    label: CHIP_LABEL[kind],
+  }));
+}
+
+export function summaryText(lines: StoryLine[]): string {
+  return summaryChips(lines).map((chip) => `${chip.symbol}${chip.count} ${chip.label}`).join("  ");
+}
+
+export function footerFor(lines: StoryLine[]): string {
+  let claimed = 0;
+  let found = 0;
+  let notFound = 0;
+  let notChecked = 0;
+  let lookups = 0;
+  for (const line of lines) {
+    if (line.tone === "read") {
+      lookups += line.readCount ?? 1;
+      continue;
+    }
+    if (line.tone === "note" || line.tone === "unknown") continue;
+    if (line.tone === "not_found") {
+      notFound += 1;
+      claimed += 1;
+      continue;
+    }
+    if (line.tone === "not_checked") {
+      notChecked += 1;
+      claimed += 1;
+      continue;
+    }
+    if (line.tone === "failed") continue;
+    if (line.source === "verified") {
+      found += 1;
+      if (line.claimed) claimed += 1;
+      continue;
+    }
+    if (line.source === "claim" && line.write) {
+      claimed += 1;
+      notChecked += 1;
+    }
+  }
+  const parts: string[] = [];
+  if (claimed > 0) {
+    parts.push(`Agent claimed ${claimed} ${claimed === 1 ? "thing" : "things"}`);
+    if (found > 0) parts.push(`${found} found in your accounts`);
+    if (notFound > 0) parts.push(`${notFound} not found`);
+    if (notChecked > 0) parts.push(`${notChecked} not checked`);
+  } else if (found > 0) {
+    parts.push(`${found} found in your accounts`);
+  }
+  if (lookups > 0) parts.push(`${lookups} ${lookups === 1 ? "lookup" : "lookups"}`);
+  return parts.join(" · ");
+}
+
+function chipKind(line: StoryLine): ChipKind | null {
+  const tone = displayTone(line);
+  switch (tone) {
+    case "created":
+      return "added";
+    case "changed":
+      return "changed";
+    case "removed":
+      return "removed";
+    case "moved":
+      return "moved";
+    case "shared":
+      return "shared";
+    case "failed":
+    case "read":
+    case "unknown":
+    case "note":
+    case "not_found":
+    case "not_checked":
+      return null;
+    default:
+      return assertNever(tone, "story tone");
+  }
+}
+
 export function markerFor(tone: StoryTone): string {
   switch (tone) {
     case "created":
-      return "🟢";
+      return "+";
     case "changed":
-      return "🟡";
+      return "~";
     case "removed":
-      return "🔴";
+      return "−";
+    case "moved":
+      return "→";
+    case "shared":
+      return "↗";
     case "failed":
-      return "⚠️";
+      return "Failed";
+    case "not_found":
+      return "?";
+    case "not_checked":
+      return "Not checked";
     case "read":
     case "unknown":
-      return "⚪";
     case "note":
       return "";
     default:
@@ -287,26 +430,27 @@ export function markerFor(tone: StoryTone): string {
 }
 
 export function cardRows(lines: StoryLine[]): { color: string; text: string; source: LineSource }[] {
-  const visible = lines.filter((line) => line.tone !== "note");
-  const showReadTrust = lookupSourcesMixed(visible);
+  const visible = lines.filter((line) => line.tone !== "note" && line.tone !== "read" && line.tone !== "unknown");
   return visible.map((line) => ({
     color: lineColor(line),
-    text: cardLineText(line, showReadTrust),
+    text: cardLineText(line),
     source: line.source,
   }));
 }
 
-export function cardLineText(line: StoryLine, showReadTrust = false): string {
-  const service = serviceLabel(line.service);
-  const summary = line.summary.replace(/\.$/, "");
-  const named = summary.toLowerCase().includes(service.toLowerCase()) ? summary : `${service}: ${summary}`;
-  if (line.tone === "failed") return redactText(named);
-  if (line.tone === "read") {
-    const trust = showReadTrust && line.trust ? ` · ${line.trust}` : "";
-    return redactText(`${named}${trust}`);
-  }
+export function cardLineText(line: StoryLine, _showReadTrust = false): string {
+  const summary = rowBody(line);
+  if (line.tone === "read") return redactText(summary);
+  const kind = displayTone(line);
+  const symbol = markerFor(kind);
+  const label = kindName(kind);
+  const service = shortService(line.service);
+  if (kind === "failed") return redactText(`Failed · ${service} — ${summary}`);
+  if (kind === "not_found") return redactText(`? Not found · Agent said — ${summary}`);
+  if (kind === "not_checked") return redactText(`Not checked · Agent said — ${summary}`);
   const trust = line.trust ?? trustLabel(line.source, line.service);
-  return redactText(`${named} · ${trust}`);
+  const mark = symbol ? `${symbol} ` : "";
+  return redactText(`${mark}${label} · ${service} · ${trust} — ${summary}`);
 }
 
 export function lineColor(line: StoryLine): string {
@@ -314,9 +458,10 @@ export function lineColor(line: StoryLine): string {
 }
 
 export function displayTone(line: StoryLine): StoryTone {
-  if (line.tone === "failed" || line.tone === "read" || line.tone === "note" || line.tone === "unknown") return line.tone;
+  if (line.tone === "failed" || line.tone === "read" || line.tone === "note" || line.tone === "unknown" || line.tone === "not_found" || line.tone === "not_checked" || line.tone === "moved" || line.tone === "shared") {
+    return line.tone;
+  }
   if (isDestructiveLine(line)) return "removed";
-  if (line.source === "claim" && line.write) return "changed";
   return line.tone;
 }
 
@@ -333,12 +478,28 @@ export function assignIds(lines: StoryLine[]): StoryLine[] {
 }
 
 function actionLine(action: RecordedAction): StoryLine {
+  if (action.verb === "undo" || action.tool === "undo_request") {
+    const summary = /^Undo requested\b/.test(action.summary) ? action.summary : "Undo requested. Life Diff did not run it.";
+    return {
+      service: "Life Diff",
+      source: action.source === "claim" ? "claim" : "proxy",
+      write: false,
+      tone: "note",
+      summary: summary.endsWith(".") ? summary : `${summary}.`,
+      seed: action.id,
+      time: action.time,
+    };
+  }
   const presented = presentAction(action);
   const source = action.source === "claim" ? "claim" : "proxy";
   const service = displayName(action.upstream || action.tool || "Service");
   const details = presented.before || presented.after
     ? [{ text: "When", ...(presented.before ? { before: presented.before } : {}), ...(presented.after ? { after: presented.after } : {}) }]
     : undefined;
+  const plan = presented.write
+    ? planFromAction({ ...action, tone: presented.tone === "failed" ? action.tone : presented.tone, summary: presented.summary })
+    : undefined;
+  const shaped = plan ? { ...plan, prompt: plan.prompt.replace(action.upstream, service) } : undefined;
   return {
     service,
     source,
@@ -355,35 +516,56 @@ function actionLine(action: RecordedAction): StoryLine {
     ...(presented.repo ? { repo: presented.repo } : {}),
     ...(presented.link ? { link: presented.link } : {}),
     ...(details ? { details } : {}),
-    ...(presented.hint ? { hint: presented.hint } : {}),
-    ...(presented.undoable ? { undo: "Undo available" } : {}),
     ...(presented.client ? { client: presented.client } : {}),
+    ...undoFields(shaped),
   };
 }
 
 export function storyFromUnverifiedClaims(claims: ClaimResult[], shownIds: Set<string>): StoryLine[] {
   return claims.filter((claim) => claim.status === "missing" && claim.action !== "read" && !shownIds.has(claim.id)).map((claim) => {
     const service = serviceForClaim(claim);
-    const tone = claim.action === "added" ? "created" : claim.action === "removed" ? "removed" : "changed";
     const repo = lineRepo({ ...(claim.repo ? { repo: claim.repo } : {}), target: claim.target, summary: claim.detail });
+    if (githubMiss(claim)) {
+      return {
+        service,
+        source: "claim" as const,
+        write: false,
+        tone: "not_found" as const,
+        summary: `"${claim.target}": no matching change`,
+        seed: claim.id,
+        trust: "Agent said",
+        ...(claim.url?.startsWith("https://") ? { link: claim.url } : {}),
+        ...(repo ? { repo } : {}),
+      };
+    }
+    const tone = claim.action === "added" ? "created" : claim.action === "removed" ? "removed" : claim.action === "moved" ? "moved" : claim.action === "shared" ? "shared" : "changed";
+    const summary = claimSentence({
+      tool: toolOf(claim),
+      target: claim.target,
+      tone,
+      ...(claim.detail ? { detail: claim.detail } : {}),
+      ...(claim.before ? { before: claim.before } : {}),
+      ...(claim.after ? { after: claim.after } : {}),
+    });
     return {
       service,
       source: "claim" as const,
-      write: true,
-      tone,
-      summary: claimSentence({
-        tool: toolOf(claim),
-        target: claim.target,
-        tone,
-        ...(claim.detail ? { detail: claim.detail } : {}),
-        ...(claim.before ? { before: claim.before } : {}),
-        ...(claim.after ? { after: claim.after } : {}),
-      }),
+      write: false,
+      tone: "not_checked" as const,
+      summary,
       seed: claim.id,
-      trust: trustLabel("claim", service),
-      hint: "Undo not available yet",
+      trust: "Agent said",
       ...(claim.url?.startsWith("https://") ? { link: claim.url } : {}),
       ...(repo ? { repo } : {}),
+      ...undoFields(planFromAction({
+        tool: toolOf(claim),
+        upstream: service,
+        tone,
+        effect: "write",
+        summary,
+        ok: true,
+        ...(claim.before || claim.after ? { arguments: { before: claim.before, after: claim.after, subject: claim.target } } : {}),
+      })),
     };
   });
 }
@@ -406,6 +588,56 @@ export function repoGroups(lines: StoryLine[]): { heading: string; lines: StoryL
   if (other.length === 0) return groups;
   if (groups.length === 0) return [{ heading: "", lines: other }];
   return [...groups, { heading: "Other", lines: other }];
+}
+
+function linesByService(lines: StoryLine[]): Map<string, StoryLine[]> {
+  const services = new Map<string, StoryLine[]>();
+  for (const line of lines) {
+    const list = services.get(line.service) ?? [];
+    list.push(line);
+    services.set(line.service, list);
+  }
+  return services;
+}
+
+function githubMiss(claim: ClaimResult): boolean {
+  if (!/No matching change/.test(claim.reason)) return false;
+  // A tool named in the detail wins. An old claim stored as GitHub may really be Calendar.
+  if (serviceForClaim(claim) !== "GitHub") return false;
+  return isGitHubClaimService(claim.service);
+}
+
+function markUnmatched(lines: StoryLine[], claims: ClaimResult[]): StoryLine[] {
+  const misses = new Map(claims.filter(githubMiss).map((claim) => [claim.id, claim]));
+  return lines.map((line) => {
+    const claim = misses.get(line.seed);
+    if (!claim || line.tone === "not_found") return line;
+    return {
+      ...line,
+      tone: "not_found" as const,
+      write: false,
+      summary: `"${claim.target}": no matching change`,
+      trust: "Agent said",
+      undo: undefined,
+      undoTool: undefined,
+      undoArguments: undefined,
+      undoSuggestedTool: undefined,
+      undoSuggestedArguments: undefined,
+      undoDaysLeft: undefined,
+    };
+  });
+}
+
+function undoFields(plan: UndoPlan | undefined): Pick<StoryLine, "undo" | "undoTool" | "undoArguments" | "undoSuggestedTool" | "undoSuggestedArguments" | "undoDaysLeft"> {
+  if (!plan) return {};
+  return {
+    undo: plan.prompt,
+    ...(plan.tool ? { undoTool: plan.tool } : {}),
+    ...(plan.arguments ? { undoArguments: plan.arguments } : {}),
+    ...(plan.suggestedTool ? { undoSuggestedTool: plan.suggestedTool } : {}),
+    ...(plan.suggestedArguments ? { undoSuggestedArguments: plan.suggestedArguments } : {}),
+    ...(plan.daysLeft ? { undoDaysLeft: plan.daysLeft } : {}),
+  };
 }
 
 function toolOf(claim: ClaimResult): string {
@@ -453,7 +685,7 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
         trust: trustLabel("verified", "GitHub"),
         details: files.map(fileDetail),
         link: files.find((file) => file.link)?.link,
-        hint: "Undo not available yet",
+        undo: `Undo the file changes on ${repo}.`,
       });
     }
     for (const pull of merged) {
@@ -476,7 +708,7 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
         trust: trustLabel("verified", "GitHub"),
         details: comments.map((comment) => ({ text: comment.summary })),
         link: comments.find((comment) => comment.link)?.link,
-        hint: "Undo not available yet",
+        undo: `Delete the comments on ${repo} if they should not stay.`,
       });
     }
   }
@@ -484,7 +716,7 @@ function groupGitHub(receiptId: string, changes: Change[]): StoryLine[] {
 }
 
 function changeLine(receiptId: string, change: Change, summary: string, details: StoryDetail[]): StoryLine {
-  const undoable = Boolean(reversalForChange(change));
+  const plan = undoForChange({ ...change, summary });
   return {
     service: "GitHub",
     source: "verified",
@@ -495,10 +727,10 @@ function changeLine(receiptId: string, change: Change, summary: string, details:
     time: change.occurredAt,
     repo: change.repo,
     trust: trustLabel("verified", "GitHub"),
-    hint: undoable ? "Undo available" : "Undo not available yet",
+    ...(change.claimStatus === "verified" ? { claimed: true } : {}),
     ...(details.length > 0 ? { details } : {}),
     ...(change.link ? { link: change.link } : {}),
-    ...(undoable ? { undo: "Undo available" } : {}),
+    ...undoFields(plan ? { ...plan, prompt: plan.prompt } : undefined),
   };
 }
 
@@ -622,7 +854,7 @@ function attentionRank(line: StoryLine): number {
   if (line.source === "claim" && line.tone !== "failed") return 0;
   if (line.tone === "failed") return 1;
   if (isDestructiveLine(line)) return 2;
-  if (line.tone === "created" || line.tone === "changed" || line.tone === "removed") return 3;
+  if (line.tone === "created" || line.tone === "changed" || line.tone === "removed" || line.tone === "moved" || line.tone === "shared") return 3;
   return 4;
 }
 
@@ -630,28 +862,31 @@ function isDestructiveLine(line: StoryLine): boolean {
   if (line.tone === "failed" || line.tone === "read" || line.tone === "note" || line.tone === "unknown") return false;
   if (line.tone === "removed") return true;
   const blob = `${line.verb ?? ""} ${line.tool ?? ""} ${line.summary}`.toLowerCase().replace(/[_-]+/g, " ");
-  return /\b(deleted|delete|removed|remove|sent|send|shared|share|sharing|permissions|permission|unshared|unshare|revoked|revoke|trashed|trash)\b/.test(blob);
+  return /\b(deleted|delete|removed|remove|sent|send|permissions|permission|unshared|unshare|revoked|revoke|trashed|trash)\b/.test(blob);
 }
 
 export function serviceLabel(name: string): string {
   return displayName(name);
 }
 
-function formatLine(line: StoryLine, showClient: boolean, showReadTrust: boolean): string {
-  const mark = lineMarker(line);
-  const prefix = mark ? `${mark} ` : "";
+function formatChange(line: StoryLine, pageLink: string, showClient: boolean): string[] {
+  const kind = displayTone(line);
+  const service = shortService(line.service);
+  const trust = line.tone === "failed" || line.tone === "read" ? "" : (line.trust ?? trustLabel(line.source, line.service));
+  const who = showClient && line.client ? ` · ${line.client}` : "";
+  let head: string;
+  if (kind === "failed") head = `Failed · ${service}`;
+  else if (kind === "not_found") head = `? Not found · Agent said`;
+  else if (kind === "not_checked") head = `Not checked · Agent said`;
+  else if (kind === "read") head = `${service}${who}`;
+  else head = `${markerFor(kind)} ${kindName(kind)} · ${service}${trust ? ` · ${trust}` : ""}${who}`;
+  const href = undoHref(pageLink, line);
   const link = line.link ? ` · [Open](${line.link})` : "";
-  const trust = line.tone === "failed"
-    ? ""
-    : line.tone === "read"
-      ? (showReadTrust && line.trust ? ` · ${line.trust}` : "")
-      : (line.trust ? ` · ${line.trust}` : "");
-  const hint = line.hint ? ` · ${line.hint}` : "";
-  const by = showClient && line.client ? ` · ${line.client}` : "";
-  return `${prefix}${line.summary}${link}${trust}${hint}${by}`;
+  const undo = href ? ` · [${undoLabel(line.undoDaysLeft)}](${href})` : "";
+  return [head, `${rowBody(line)}${link}${undo}`];
 }
 
-/** Keep one heading per repository inside a service, in the order that repository first appeared. */
+/** Keep one repository's lines together inside a service, in the order that repository first appeared. */
 function coalesceRepos(lines: StoryLine[]): StoryLine[] {
   const out: StoryLine[] = [];
   let index = 0;
@@ -690,17 +925,88 @@ function failedTrust(service: string): string {
   return `Failed in ${displayName(service)}`;
 }
 
-function repoHeading(repo: string, lines: StoryLine[], showClient: boolean): string {
-  const clients = new Set(lines.map((line) => line.client).filter((client): client is string => Boolean(client)));
-  const client = clients.size === 1 ? [...clients][0] : undefined;
-  const writes = lines.filter((line) => line.write && line.tone !== "failed" && line.tone !== "read");
-  if (showClient && client && writes.length === 1) {
-    const summary = writes[0]?.summary ?? "";
-    const kind = summary.includes("pull request") ? "pull request opened" : summary.includes("issue") ? "issue" : "change";
-    return `${repo}: 1 ${kind} by ${client}`;
+export function undoPlansFor(receipt: Receipt, origin: string): {
+  changeId: string;
+  prompt: string;
+  summary: string;
+  service: string;
+  url: string;
+  tool?: string;
+  arguments?: Record<string, unknown>;
+  suggestedTool?: string;
+  suggestedArguments?: Record<string, unknown>;
+  daysLeft?: number;
+}[] {
+  const lines = condenseLines(storyFromReceipt(receipt), { detail: false });
+  return lines.flatMap((line) => {
+    if (!line.undo || !line.id) return [];
+    return [{
+      changeId: line.id,
+      prompt: line.undo,
+      summary: rowBody(line),
+      service: line.service,
+      url: `${origin.replace(/\/$/, "")}/receipts/${encodeURIComponent(receipt.id)}/undo/${encodeURIComponent(line.id)}`,
+      ...(line.undoTool ? { tool: line.undoTool } : {}),
+      ...(line.undoArguments ? { arguments: line.undoArguments } : {}),
+      ...(line.undoSuggestedTool ? { suggestedTool: line.undoSuggestedTool } : {}),
+      ...(line.undoSuggestedArguments ? { suggestedArguments: line.undoSuggestedArguments } : {}),
+      ...(line.undoDaysLeft ? { daysLeft: line.undoDaysLeft } : {}),
+    }];
+  });
+}
+
+export function undoHref(pageLink: string, line: StoryLine): string | undefined {
+  if (!line.undo || !line.id) return undefined;
+  let origin = "";
+  let path = "";
+  try {
+    const url = new URL(pageLink);
+    origin = url.origin;
+    path = url.pathname.replace(/\/$/, "");
+  } catch {
+    return undefined;
   }
-  if (showClient && client) return `${repo} · ${client}`;
-  return repo;
+  if (line.receiptId) return `${origin}/receipts/${encodeURIComponent(line.receiptId)}/undo/${encodeURIComponent(line.id)}`;
+  if (path.includes("/receipts/")) return `${origin}${path}/undo/${encodeURIComponent(line.id)}`;
+  return undefined;
+}
+
+export function kindName(tone: StoryTone): string {
+  switch (tone) {
+    case "created":
+      return "Added";
+    case "changed":
+      return "Changed";
+    case "removed":
+      return "Removed";
+    case "moved":
+      return "Moved";
+    case "shared":
+      return "Shared";
+    case "failed":
+      return "Failed";
+    case "not_found":
+      return "Not found";
+    case "not_checked":
+      return "Not checked";
+    case "read":
+      return "Lookup";
+    case "unknown":
+    case "note":
+      return "";
+    default:
+      return assertNever(tone, "story tone");
+  }
+}
+
+export function rowBody(line: StoryLine): string {
+  if (line.tone !== "failed") return line.summary.replace(/\.$/, "");
+  const summary = line.summary.replace(/\.$/, "");
+  const service = displayName(line.service);
+  const prefix = `Failed in ${service}`;
+  if (!summary.startsWith(prefix)) return line.summary;
+  const rest = summary.slice(prefix.length).replace(/^[.\s]+/, "");
+  return rest || line.summary;
 }
 
 function mismatchLines(actions: RecordedAction[], changes: Change[]): StoryLine[] {
@@ -796,13 +1102,18 @@ function colorFor(tone: StoryTone): string {
     case "changed":
       return "#F5A524";
     case "removed":
-      return "#8d1c1c";
     case "failed":
       return "#8d1c1c";
+    case "moved":
+    case "shared":
+      return "#2f6fed";
+    case "not_checked":
+      return "#c4a15a";
+    case "not_found":
     case "read":
     case "unknown":
     case "note":
-      return "#5c564c";
+      return "#8a8175";
     default:
       return assertNever(tone, "story tone");
   }

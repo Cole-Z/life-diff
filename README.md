@@ -6,13 +6,15 @@ Life Diff is what all your AI agents changed across your tools today. GitHub is 
 
 ## What you get
 
-The first line says whether to care. Anything that needs a look comes first: a change the agent reported but Life Diff could not check, a failed call, and a delete, send, or permission change. Those lines are amber or red. Checked changes come next, in the same colors as before. Lookups collapse to one short line per service. A line checked against a service's own history says **Verified in GitHub** (or that service). A call Life Diff forwarded says **Sent to Gmail, not verified**. A change only the agent reported says **Agent says it did this, not verified**.
+A receipt is a dark rounded card (it follows the system theme). The eyebrow says SESSION DIFF, or TODAY on the daily page. The title is the agent and the time range in your zone, such as Grok Bot · 9:02–9:41 AM CT. Counts are only the kinds that happened: + added, ~ changed, − removed, → moved, ↗ shared. Each change is one row, tinted by kind, with a short Verified or Agent said tag. A claim GitHub was checked for and did not find is Not found. A claim for a service Life Diff cannot check yet is Not checked. A failed call is a red Failed row. Lookups are not rows. They sit in the footer with the claim counts: Agent claimed 6 things · 5 found in your accounts · 1 not found · 3 lookups.
 
 ![The same receipt in dark mode](docs/images/receipt-dark.webp)
 
 ![The end-of-day page](docs/images/daily.webp)
 
-![The session card. The header says This session.](docs/images/card.png)
+![The end-of-day page in dark mode](docs/images/daily-dark.webp)
+
+![The session card. The eyebrow says SESSION DIFF.](docs/images/card.png)
 
 ## Quick start
 
@@ -66,41 +68,56 @@ Reconnect if the client cached the tool list. The tools are named `deepwiki__rea
 
 4. Work normally. The first proxied call opens a session if none is open. Ask the agent to call `end_session` before its final reply. An idle session closes itself after 20 minutes (change that on the settings page) and writes the receipt then. At the end of the day, `get_daily_diff` (`get_roundup` is the same tool) is the whole day. The page is [lifediff.dev/roundup](https://lifediff.dev/roundup).
 
-Pass `repos` to `start_session` only for repositories you want checked. Leave it out and GitHub is not read. Turn on **Include GitHub repository changes** in settings before those changes appear on the daily page. `log_action` is only for a change made outside Life Diff. Skip reads, and skip a tool already called through Life Diff. Optional `before` and `after` are the old and new values, such as a moved event's times. Optional `url` is an https link to the object. A GitHub change is checked only when this session snapshotted GitHub. Anything else is shown as reported, not verified. Show the receipt only when something changed. When nothing changed, rely on the daily diff.
+Pass `repos` to `start_session` only for repositories you want checked. Leave it out and GitHub is not read. Turn on **Include GitHub repository changes** in settings before those changes appear on the daily page. `log_action` is only for a change made outside Life Diff. Skip reads, and skip a tool already called through Life Diff. `action` is `added`, `removed`, `modified`, `moved`, `shared`, or `read`. `move` and `rename` are moved. `share` is shared. `trash` is removed. Optional `before` and `after` are the old and new values, such as a moved event's times. Optional `url` is an https link to the object. A GitHub change is checked only when this session snapshotted GitHub. Anything else is shown as what the agent said. Show the receipt only when something changed. When nothing changed, rely on the daily diff.
+
+`undo_change` and `undo_session` return a plain-English instruction and, when the original call was stored, a suggested tool call. Life Diff does not run the undo. It records that an undo was requested. The next receipt shows the reverse change only after the agent runs it. On the receipt page, Undo opens that prompt. In markdown, Undo links to `https://lifediff.dev/receipts/<id>/undo/<changeId>`, which requires the same sign-in as the receipt.
 
 5. This is the receipt the agent shows. The card image comes with the tool result. The markdown does not include the card token.
 
 ```markdown
-4 changes, 1 needs a look · 1 failed
+SESSION DIFF
+Grok Bot · 9:02–9:41 AM CT
 
-**Google Calendar**
-🟡 Moved "Design Sync" · Tue 2:00 PM → Thu 3:00 PM · [Open](https://calendar.google.com/calendar/event?eid=demo) · Agent says it did this, not verified · Undo not available yet
++2 added  ~1 changed  −1 removed  →2 moved  ↗1 shared
 
-**Notion**
-⚠️ Failed in Notion. The page was not saved · Cursor
+? Not found · Agent said
+"Renamed the Q4 folder": no matching change
 
-**Gmail**
-🔴 Sent 'Notes for Friday' from Gmail. · [Open](https://mail.google.com/mail/u/0/#drafts/demo) · Sent to Gmail, not verified · Undo not available yet · Grok Bot
+→ Moved · Calendar · Agent said
+Standup moved 9:30 → 10:00 AM · [Undo](https://lifediff.dev/receipts/rcpt_demo/undo/of)
 
-**GitHub**
-cole-z/cardpost
-🟢 Opened pull request "Fix login" (#12) on cole-z/cardpost. · [Open](https://github.com/cole-z/cardpost/pull/12) · Verified in GitHub · Undo not available yet
++ Added · Calendar · Agent said
+Dentist added, Tue 2:00 PM · [Undo](https://lifediff.dev/receipts/rcpt_demo/undo/hg)
 
-**Google Drive**
-🟡 Renamed 'Q2 goals' to 'Q2 plan' in Google Drive. · [Open](https://drive.google.com/file/d/demo/view) · Sent to Google Drive, not verified · Undo not available yet · Cursor
+→ Moved · Drive · Agent said
+Q3-receipts.xlsx moved to /Archive · [Undo](https://lifediff.dev/receipts/rcpt_demo/undo/6r)
 
-**DeepWiki**
-⚪ 2 lookups · Grok Bot
+− Removed · Drive · Agent said
+3 files moved to trash · [Undo (30 days left)](https://lifediff.dev/receipts/rcpt_demo/undo/6d)
 
-**Slack**
-⚪ 1 lookup · Cursor
+↗ Shared · Drive · Agent said
+Budget sheet shared with a new person · [Undo](https://lifediff.dev/receipts/rcpt_demo/undo/nc)
+
+Not checked · Agent said
+Call mom added · [Undo](https://lifediff.dev/receipts/rcpt_demo/undo/4z)
+
+~ Changed · Notion · Agent said
+Launch notes changed draft → final · [Undo](https://lifediff.dev/receipts/rcpt_demo/undo/75)
+
+Failed · Notion
+Quota exceeded
+
++ Added · GitHub · Verified
+Opened pull request "Fix login" (#12) on cole-z/cardpost · [Open](https://github.com/cole-z/cardpost/pull/12) · [Undo](https://lifediff.dev/receipts/rcpt_demo/undo/cb)
+
+Agent claimed 9 things · 1 found in your accounts · 1 not found · 7 not checked · 3 lookups
 
 Full receipt: https://lifediff.dev/receipts/rcpt_demo
 ```
 
-A day or a session with only lookups is one line, `Nothing changed · 2 lookups`, when those lookups come from one source. `get_receipt` always renders the card when you ask for that receipt. `end_session` omits the card for a lookup-only session: the tool result has no image and omits `imageUrl` and `cardToken`. The receipt is still saved. When a day mixes a call Life Diff forwarded with one the agent reported, each lookup row names that source (`7 lookups · Sent to DeepWiki, not verified`). With nothing at all, both say `Nothing changed`. A read stored beside a matching call Life Diff already forwarded is counted once. A session that never snapshotted GitHub keeps "GitHub not checked this session." in the receipt notes, not in the chat line or the card.
+A day or a session with only lookups is one line, `Nothing changed · 2 lookups`. `get_receipt` always renders the card when you ask for that receipt, plus an `undos` list of prompts. `end_session` omits the card for a lookup-only session: the tool result has no image and omits `imageUrl` and `cardToken`. The receipt is still saved. `get_daily_diff` reads an open session as still in progress and does not close it. With nothing at all, both say `Nothing changed`. A read stored beside a matching call Life Diff already forwarded is counted once. A session that never snapshotted GitHub keeps "GitHub not checked this session." in the receipt notes, not in the chat line or the card.
 
-The first line counts changes the same way for a session and a day. Checked and forwarded changes are `3 changes`. A change only the agent reported is `1 change needs a look`. A mix is `3 changes, 1 needs a look`. Failures are counted on their own: `1 change needs a look · 1 failed`, `3 changes, 1 needs a look · 2 failed`, or, when nothing else changed, `1 failed call`. A failed call is `Failed in Notion` plus a short reason, with no "Sent to" badge. In the structured lines, that failure's trust is `Failed in Notion` as well. With detail on, lookups for one repository stay under a single heading, in the order that repository first appeared.
+Counts use the same chips for a session and a day, and only kinds that happened are shown (`+1 added  →1 moved`). Failures are counted on their own (`+1 added · 1 failed`, or `1 failed` when that is the only news). A failed call is a Failed row plus the short reason. Its structured trust is `Failed in Notion`. A reason that starts with `Error:` or `Error -` drops that label. With detail on, lookups for one repository stay together, in the order that repository first appeared. The longer trust definitions stay in the receipt notes.
 
 Life Diff only sees calls routed through it. It does not block, rewrite, or retry a call. A missing list item is not a deletion. Tokens are encrypted and are never returned or written to a log.
 

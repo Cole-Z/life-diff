@@ -29,6 +29,14 @@ const KEYS: Record<string, string> = {
   deepwiki: "deepwiki",
 };
 
+/** Short row label. Calendar and Drive drop the Google prefix. */
+export function shortService(raw: string): string {
+  const full = displayName(raw);
+  if (full === "Google Calendar") return "Calendar";
+  if (full === "Google Drive") return "Drive";
+  return full;
+}
+
 /** Brand name for a service. Unknown names are title-cased, never left as a raw slug. */
 export function displayName(raw: string): string {
   const trimmed = raw.trim();

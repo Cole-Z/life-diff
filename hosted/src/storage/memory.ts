@@ -52,17 +52,35 @@ export class MemoryMetadataStore implements MetadataStore {
     this.sessions.set(row.id, { ...row });
   }
 
-  async closeSession(input: { id: string; endedAt: string; receiptId: string; snapshotExpiresAt: string }): Promise<void> {
+  async getSession(userId: string, sessionId: string): Promise<SessionRow | null> {
+    const row = this.sessions.get(sessionId);
+    if (!row || row.userId !== userId) return null;
+    return { ...row };
+  }
+
+  async latestClosedSession(userId: string): Promise<SessionRow | null> {
+    const rows = [...this.sessions.values()].filter((row) => row.userId === userId && row.status === "closed" && row.endedAt);
+    rows.sort((a, b) => (b.endedAt ?? "").localeCompare(a.endedAt ?? ""));
+    const row = rows[0];
+    return row ? { ...row } : null;
+  }
+
+  async closeSession(input: { id: string; endedAt: string; receiptId: string; snapshotExpiresAt: string }): Promise<boolean> {
     const row = this.sessions.get(input.id);
-    if (!row) return;
+    if (!row || row.status !== "open") return false;
     row.status = "closed";
     row.endedAt = input.endedAt;
     row.receiptId = input.receiptId;
     row.snapshotExpiresAt = input.snapshotExpiresAt;
+    return true;
   }
 
   async insertReceipt(row: ReceiptRow): Promise<void> {
     this.receipts.set(row.id, { ...row });
+  }
+
+  async deleteReceipt(id: string): Promise<void> {
+    this.receipts.delete(id);
   }
 
   async listReceipts(userId: string, limit: number): Promise<ReceiptMeta[]> {

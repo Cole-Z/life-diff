@@ -109,8 +109,12 @@ export interface MetadataStore {
   getCredentials(userId: string): Promise<CredentialRow | null>;
   replaceInstallations(userId: string, rows: InstallationRow[], now: string): Promise<void>;
   insertSession(row: SessionRow): Promise<void>;
-  closeSession(input: { id: string; endedAt: string; receiptId: string; snapshotExpiresAt: string }): Promise<void>;
+  getSession(userId: string, sessionId: string): Promise<SessionRow | null>;
+  latestClosedSession(userId: string): Promise<SessionRow | null>;
+  /** Closes the session only when it is still open. Returns false when another closer already did. */
+  closeSession(input: { id: string; endedAt: string; receiptId: string; snapshotExpiresAt: string }): Promise<boolean>;
   insertReceipt(row: ReceiptRow): Promise<void>;
+  deleteReceipt(id: string): Promise<void>;
   listReceipts(userId: string, limit: number): Promise<ReceiptMeta[]>;
   listReceiptsSince(userId: string, since: string, limit: number): Promise<ReceiptMeta[]>;
   getReceipt(userId: string, receiptId: string): Promise<ReceiptMeta | null>;

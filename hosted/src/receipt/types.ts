@@ -120,6 +120,8 @@ export interface RecordedAction {
   corroborated?: boolean;
   /** MCP client that reported the call, when more than one agent is in view. */
   client?: string;
+  /** Repository this call was about, when the agent named one. */
+  repo?: string;
 }
 
 export interface Receipt {

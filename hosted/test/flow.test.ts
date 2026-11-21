@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { actionsToClaims, validateAction } from "../src/actions/log";
-import { endSession, logAction, sessionPortFromBook, startSession } from "../src/app/service";
+import { AppError, closeIdleSession, endSession, logAction, recordProxyCall, sessionPortFromBook, startSession } from "../src/app/service";
+import { plainSummary } from "../src/receipt/build";
+import { buildRoundup } from "../src/receipt/roundup";
 import { SessionBook } from "../src/session/book";
 import { MemoryMetadataStore, MemoryObjectStore } from "../src/storage/memory";
 import { deleteUserData, runRetention } from "../src/storage/retention";
@@ -224,6 +226,124 @@ describe("D1 statements", () => {
     expect(calls.map((call) => call.sql).join("\n")).not.toContain("DROP TABLE");
     expect(calls[0]?.binds[0]).toBe("42'); DROP TABLE users;--");
   });
+
+  it("closes a session only while it is still open", async () => {
+    const calls: { sql: string }[] = [];
+    const db: Sql = {
+      prepare(sql: string) {
+        const statement = {
+          bind() { return statement; },
+          async all<T>() { return { results: [] as T[] }; },
+          async run() {
+            calls.push({ sql });
+            return { meta: { changes: 1 } };
+          },
+          async first<T>() { return null as T | null; },
+        };
+        return statement;
+      },
+    };
+    const store = new D1MetadataStore(db);
+    expect(await store.closeSession({
+      id: "ses_1",
+      endedAt: "2026-04-02T15:00:00.000Z",
+      receiptId: "rcpt_1",
+      snapshotExpiresAt: "2026-04-03T15:00:00.000Z",
+    })).toBe(true);
+    expect(calls.at(-1)?.sql).toContain("status = 'open'");
+  });
+});
+
+describe("closing a session", () => {
+  function depsFor(book: SessionBook, meta = new MemoryMetadataStore(), objects = new MemoryObjectStore()) {
+    return {
+      userId: "42",
+      login: "octocat",
+      now,
+      timeZone: "UTC",
+      maxRepos: 25,
+      receiptRetentionDays: 90,
+      snapshotRetentionHours: 24,
+      abandonedSessionDays: 7,
+      github: fakeApi(),
+      sessions: sessionPortFromBook(book),
+      meta,
+      objects,
+    };
+  }
+
+  async function lookup(deps: ReturnType<typeof depsFor>) {
+    await recordProxyCall(deps, {
+      upstream: "deepwiki",
+      tool: "read_wiki_structure",
+      args: { repoName: "golang/go" },
+      ok: true,
+      status: "ok",
+      summary: "Looked up the docs outline for golang/go in DeepWiki.",
+      classification: { effect: "read", tone: "read", verb: "read" },
+      durationMs: 4,
+    });
+  }
+
+  it("leaves an open session in progress when the daily diff is read beside end_session", async () => {
+    const book = new SessionBook();
+    const meta = new MemoryMetadataStore();
+    const objects = new MemoryObjectStore();
+    const deps = depsFor(book, meta, objects);
+    const started = await startSession(deps, {});
+    await lookup(deps);
+    const open = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: true, detail: true });
+    expect(book.getOpen()?.id).toBe(started.sessionId);
+    expect(meta.receipts.size).toBe(0);
+    expect(open.markdown).toContain("golang/go");
+    const [day, ended] = await Promise.all([
+      buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: true, detail: true }),
+      endSession(deps, {}),
+    ]);
+    expect(meta.receipts.size).toBe(1);
+    expect(ended.receipt.id).toBe([...meta.receipts.values()][0]?.id);
+    expect(book.getOpen()).toBeNull();
+    expect(day.markdown).toContain("golang/go");
+    expect(ended.summary).toBe(plainSummary(ended.receipt));
+  });
+
+  it("returns one receipt when end_session runs twice at once", async () => {
+    const book = new SessionBook();
+    const meta = new MemoryMetadataStore();
+    const deps = depsFor(book, meta);
+    await startSession(deps, {});
+    await lookup(deps);
+    const [first, second] = await Promise.all([endSession(deps, {}), endSession(deps, {})]);
+    expect(meta.receipts.size).toBe(1);
+    expect(second.receipt.id).toBe(first.receipt.id);
+    expect(second.summary).toBe(first.summary);
+    expect(second.html).toBe(first.html);
+    expect(book.getOpen()).toBeNull();
+  });
+
+  it("returns the existing receipt after an idle close", async () => {
+    const book = new SessionBook();
+    const meta = new MemoryMetadataStore();
+    const objects = new MemoryObjectStore();
+    const deps = depsFor(book, meta, objects);
+    const started = await startSession(deps, {});
+    await lookup(deps);
+    const closedAt = new Date(now.getTime() + 21 * 60 * 1000);
+    await closeIdleSession({ ...deps, now: closedAt });
+    expect(book.getOpen()).toBeNull();
+    expect(meta.receipts.size).toBe(1);
+    const stored = [...meta.receipts.values()][0];
+    expect(stored).toBeTruthy();
+    const replay = await endSession({ ...deps, now: new Date(closedAt.getTime() + 60_000) }, { sessionId: started.sessionId });
+    expect(replay.receipt.id).toBe(stored?.id);
+    expect(replay.summary).toBe(plainSummary(replay.receipt));
+    expect(replay.html).toBe(await objects.get(stored?.htmlKey ?? ""));
+    const again = await endSession({ ...deps, now: new Date(closedAt.getTime() + 120_000) }, {});
+    expect(again.receipt.id).toBe(stored?.id);
+    expect(meta.receipts.size).toBe(1);
+    await expect(endSession({ ...deps, now: new Date(closedAt.getTime() + 25 * 60 * 60 * 1000) }, { sessionId: started.sessionId })).rejects.toBeInstanceOf(AppError);
+    expect(meta.receipts.size).toBe(1);
+  });
 });
 
 describe("session book", () => {
@@ -247,6 +367,26 @@ describe("session book", () => {
     book.close("ses_1");
     expect(book.getOpen()).toBeNull();
     expect(() => book.list("ses_1")).toThrow(/not open/);
+  });
+
+  it("lets one closer claim the session", () => {
+    const book = new SessionBook();
+    book.start({
+      id: "ses_1",
+      startedAt: "2026-04-02T15:00:00.000Z",
+      snapshotId: "none",
+      snapshotKey: "",
+      timeZone: "UTC",
+      repos: [],
+      warnings: [],
+    });
+    const first = book.claimClose();
+    const second = book.claimClose();
+    expect(first.status).toBe("claimed");
+    expect(second).toEqual({ status: "busy", sessionId: "ses_1" });
+    expect(book.getOpen()?.id).toBe("ses_1");
+    book.abortClose("ses_1");
+    expect(book.claimClose().status).toBe("claimed");
   });
 });
 

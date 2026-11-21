@@ -51,10 +51,8 @@ export async function buildRoundup(deps: CoreDeps & { issuer: string }, input: {
   detail?: boolean;
   save: boolean;
   finalize?: boolean;
-  seal?: () => Promise<void>;
   markViewed?: boolean;
 }): Promise<Roundup> {
-  if (input.seal) await input.seal();
   const settings = await deps.meta.getSettings(deps.userId);
   const today = localClock(deps.now, settings.timeZone).date;
   const day = resolveDay(input.date, today);
@@ -242,7 +240,18 @@ async function collectLines(deps: CoreDeps, settings: UserSettings, window: { st
     });
     raw.push(...storyFromActions(recorded));
   }
-  return condenseLines(raw, { detail });
+  return condenseLines(dedupeSeeds(raw), { detail });
+}
+
+function dedupeSeeds(lines: StoryLine[]): StoryLine[] {
+  const seen = new Set<string>();
+  const out: StoryLine[] = [];
+  for (const line of lines) {
+    if (seen.has(line.seed)) continue;
+    seen.add(line.seed);
+    out.push(line);
+  }
+  return out;
 }
 
 function resolveAfter(since: string | undefined, lastViewedAt: string | undefined): string | undefined {

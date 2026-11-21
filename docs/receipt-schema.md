@@ -94,7 +94,7 @@ A new provider adds an object here. It does not add a new top-level field.
 | --- | --- |
 | `id` | Caller-supplied id, or `claim-1`, `claim-2`, ... |
 | `service` | The provider id the claim named, when it named one. |
-| `action` | Normalized `added`, `removed`, or `modified` when the claim named one. |
+| `action` | Normalized `added`, `removed`, or `modified` when the claim named one. Hosted receipts also store `moved` and `shared`. |
 | `target` | The name or id the agent gave. |
 | `detail` | Optional text from the agent. |
 | `status` | `verified` or `missing`. |
@@ -102,7 +102,7 @@ A new provider adds an object here. It does not add a new top-level field.
 | `matchedChangeIds` | The change id that satisfied the claim. One claim matches at most one change. |
 | `reason` | Plain-language explanation. |
 
-Hosted receipts stay on schema `1.0.0`. A hosted claim may also include optional `before`, `after`, and `url`. Readers ignore fields they do not know. There is no migration.
+Hosted receipts stay on schema `1.0.0`. A hosted claim may also include optional `before`, `after`, and `url`, and `action` may be `moved` or `shared`. Readers ignore fields they do not know. Undo prompts are computed when a receipt is shown. They are not stored on the receipt. There is no migration.
 
 A change that no claim matched has `claimStatus` `unclaimed`. That is the third verdict. It lives on the change, not as a synthetic claim.
 
@@ -111,7 +111,7 @@ A change that no claim matched has `claimStatus` `unclaimed`. That is the third 
 A claim matches a change only when:
 
 - the service matches, if the claim named one
-- the action matches the change kind, if the claim named one (`move` and `rename` are `modified`; `create` is `added`; `delete` and `trash` are `removed`)
+- the action matches the change kind, if the claim named one (`create` is `added`; `delete` and `trash` are `removed`). The local `lifediff` command still stores `move` and `rename` as `modified`. Hosted `log_action` stores `move` and `rename` as `moved` and `share` as `shared`, and those still match a `modified` GitHub change.
 - the target equals the resource id, or equals the name ignoring case, or is a whole phrase inside the name (at least 3 characters)
 
 The highest score wins. Each change is used for at most one claim.

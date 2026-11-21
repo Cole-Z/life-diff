@@ -3,7 +3,7 @@ import { serviceFromTool } from "./names";
 import type { ActionEffect, ActionTone, RecordedAction } from "./types";
 
 const EFFECTS = new Set<ActionEffect>(["read", "write", "unknown"]);
-const TONES = new Set<ActionTone>(["created", "changed", "removed", "read", "unknown"]);
+const TONES = new Set<ActionTone>(["created", "changed", "removed", "moved", "shared", "read", "unknown"]);
 
 export function recordedFrom(action: LoggedAction): RecordedAction | null {
   const claim = action.source !== "proxy";
@@ -51,6 +51,10 @@ function toneFromAction(action: string | undefined): ActionTone {
       return "created";
     case "removed":
       return "removed";
+    case "moved":
+      return "moved";
+    case "shared":
+      return "shared";
     case "read":
       return "read";
     case "modified":

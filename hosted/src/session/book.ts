@@ -14,7 +14,7 @@ export interface OpenSession {
 
 export type ActionSource = "proxy" | "claim";
 export type StoredEffect = "read" | "write" | "unknown";
-export type StoredTone = "created" | "changed" | "removed" | "read" | "unknown";
+export type StoredTone = "created" | "changed" | "removed" | "moved" | "shared" | "read" | "unknown";
 
 export interface LoggedAction {
   id: string;
@@ -269,7 +269,7 @@ function parseAction(raw: unknown): LoggedAction | null {
     ...(typeof record.error === "string" ? { error: record.error } : {}),
     ...(typeof record.durationMs === "number" ? { durationMs: record.durationMs } : {}),
     ...(record.effect === "read" || record.effect === "write" || record.effect === "unknown" ? { effect: record.effect } : {}),
-    ...(record.tone === "created" || record.tone === "changed" || record.tone === "removed" || record.tone === "read" || record.tone === "unknown" ? { tone: record.tone } : {}),
+    ...(record.tone === "created" || record.tone === "changed" || record.tone === "removed" || record.tone === "moved" || record.tone === "shared" || record.tone === "read" || record.tone === "unknown" ? { tone: record.tone } : {}),
     ...(typeof record.verb === "string" ? { verb: record.verb } : {}),
     ...(typeof record.summary === "string" ? { summary: record.summary } : {}),
     ...(typeof record.status === "string" ? { status: record.status } : {}),

@@ -3,6 +3,8 @@ import { AppError, getReceipt, logAction } from "../app/service";
 import { eraseUser, oauthServer } from "../auth/worker";
 import type { Env } from "../env";
 import { receiptCardKey } from "../receipt/card";
+import { renderUndoPage } from "../receipt/page";
+import { undoPlansFor } from "../receipt/story";
 import { D1MetadataStore, R2ObjectStore } from "../storage/d1";
 import { browserSession } from "./session";
 
@@ -10,6 +12,13 @@ export async function handleData(request: Request, env: Env): Promise<Response> 
   const url = new URL(request.url);
   const cardMatch = url.pathname.match(/^\/receipts\/([^/]+)\/card\.png$/);
   if (request.method === "GET" && cardMatch?.[1]) return serveReceiptCard(env, decodeURIComponent(cardMatch[1]), url.searchParams.get("t") ?? "");
+  const undoMatch = url.pathname.match(/^\/receipts\/([^/]+)\/undo(?:\/([^/]+))?$/);
+  if (request.method === "GET" && undoMatch?.[1]) {
+    const undoAuth = await requireUser(request, env, url);
+    if (undoAuth instanceof Response) return undoAuth;
+    if (!undoAuth.scope.includes("receipts:read")) return new Response("receipts:read is required", { status: 403 });
+    return serveUndo(env, undoAuth, decodeURIComponent(undoMatch[1]), undoMatch[2] ? decodeURIComponent(undoMatch[2]) : undefined, url.origin);
+  }
   const auth = await requireUser(request, env, url);
   if (auth instanceof Response) return auth;
   try {
@@ -70,6 +79,21 @@ async function requireUser(request: Request, env: Env, url: URL): Promise<{ user
 
 function stringField(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+async function serveUndo(env: Env, auth: { userId: string; login: string }, receiptId: string, changeId: string | undefined, origin: string): Promise<Response> {
+  try {
+    const result = await getReceipt(coreDeps(env, auth), receiptId);
+    const plans = undoPlansFor(result.receipt, origin);
+    const chosen = changeId ? plans.filter((plan) => plan.changeId === changeId) : plans;
+    if (changeId && chosen.length === 0) return new Response("Not found", { status: 404 });
+    const html = renderUndoPage({ receiptId: result.receipt.id, plans: chosen });
+    return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } });
+  } catch (error) {
+    const message = error instanceof AppError ? error.message : "Life Diff could not finish that request.";
+    const status = error instanceof AppError ? 404 : 500;
+    return new Response(message, { status });
+  }
 }
 
 async function serveReceiptCard(env: Env, id: string, token: string): Promise<Response> {

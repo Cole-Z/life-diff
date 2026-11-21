@@ -3,7 +3,7 @@ import { redactStrings, redactText } from "../proxy/redact";
 import { corroborateActions } from "./corroborate";
 import { bytesToBase64, renderCardPng } from "./card";
 import { renderDiffPage } from "./page";
-import { chatText, condenseLines, headlineFor, isQuiet, storyFromActions, storyFromChanges, storyFromReceipt, storyFromUnverifiedClaims, visibleActions, type StoryLine } from "./story";
+import { agentTitle, chatText, condenseLines, headlineFor, isQuiet, storyFromActions, storyFromChanges, storyFromReceipt, storyFromUnverifiedClaims, undoHref, visibleActions, type StoryLine } from "./story";
 import { dayWindow, localClock, type UserSettings } from "../time";
 import type { Receipt } from "./types";
 
@@ -69,23 +69,27 @@ export async function buildRoundup(deps: CoreDeps & { issuer: string }, input: {
   const imageUrl = token ? `${origin}/roundup/card.png?t=${token}` : undefined;
   const label = day === today ? "Today" : day;
   const headline = headlineFor(lines, label);
+  const heading = agentTitle(lines, settings.timeZone);
   const chat = chatText({
     headline,
     lines,
     link: page,
     linkLabel: "Full day",
     detail: input.detail === true,
+    eyebrow: "TODAY",
+    title: heading,
+    timeZone: settings.timeZone,
   });
   const markdown = redactText(chat.markdown);
   const html = redactText(renderDiffPage({
     title: `Life Diff ${day}`,
-    lede: "What your agents changed.",
-    headline,
-    when: `${day} · ${settings.timeZone} · day ends ${settings.dayEnd}`,
+    eyebrow: "TODAY",
     lines,
-    footer: "Life Diff records tool calls routed through it. GitHub is the sign-in, plus an optional check when you turn it on and name the repositories.",
+    timeZone: settings.timeZone,
+    notes: ["Life Diff records tool calls routed through it. GitHub is the sign-in, plus an optional check when you turn it on and name the repositories."],
+    footerNote: `${day} · ${settings.timeZone}`,
   }));
-  const png = await renderCardPng(lines, "Life Diff", label);
+  const png = await renderCardPng(lines, heading, "TODAY");
   const finalizedAt = input.finalize ? (existing?.finalizedAt ?? deps.now.toISOString()) : existing?.finalizedAt;
   if (input.save && token && !skipStore) {
     const cardKey = roundupCardKey(token);
@@ -167,8 +171,13 @@ export async function receiptPresentation(deps: CoreDeps, receipt: Receipt, link
     lines,
     link,
     linkLabel: "Full receipt",
+    eyebrow: "SESSION DIFF",
+    title: agentTitle(lines, receipt.timeZone, receipt.session.startedAt, receipt.session.checkedAt),
+    timeZone: receipt.timeZone,
+    startedAt: receipt.session.startedAt,
+    endedAt: receipt.session.checkedAt,
   });
-  const png = await renderCardPng(lines, "Life Diff", "This session");
+  const png = await renderCardPng(lines, agentTitle(lines, receipt.timeZone, receipt.session.startedAt, receipt.session.checkedAt), "SESSION DIFF");
   return { markdown: redactText(chat.markdown), png, lines, quiet: chat.quiet, ...(imageUrl ? { imageUrl } : {}) };
 }
 
@@ -192,7 +201,27 @@ export function sessionToolPayload(input: {
     htmlUrl: input.url,
     ...(!input.quiet && input.imageUrl ? { imageUrl: input.imageUrl } : {}),
     ...(input.includeHtml && input.html ? { html: input.html } : {}),
+    undos: undoEntries(condenseLines(storyFromReceipt(input.receipt), { detail: false }), input.url),
   };
+}
+
+export function undoEntries(lines: StoryLine[], link: string): { changeId: string; prompt: string; summary: string; service: string; url?: string; tool?: string; arguments?: Record<string, unknown>; suggestedTool?: string; suggestedArguments?: Record<string, unknown>; daysLeft?: number }[] {
+  return lines.flatMap((line) => {
+    if (!line.undo || !line.id) return [];
+    const url = undoHref(link, line);
+    return [{
+      changeId: line.id,
+      prompt: line.undo,
+      summary: line.summary,
+      service: line.service,
+      ...(url ? { url } : {}),
+      ...(line.undoTool ? { tool: line.undoTool } : {}),
+      ...(line.undoArguments ? { arguments: line.undoArguments } : {}),
+      ...(line.undoSuggestedTool ? { suggestedTool: line.undoSuggestedTool } : {}),
+      ...(line.undoSuggestedArguments ? { suggestedArguments: line.undoSuggestedArguments } : {}),
+      ...(line.undoDaysLeft ? { daysLeft: line.undoDaysLeft } : {}),
+    }];
+  });
 }
 
 function omitCardToken(receipt: Receipt): Receipt {
@@ -220,14 +249,15 @@ async function collectLines(deps: CoreDeps, settings: UserSettings, window: { st
       continue;
     }
     const actions = visibleActions(receipt).filter((action) => action.time >= window.start && action.time < window.end && (!after || action.time >= after));
-    raw.push(...storyFromActions(actions));
-    raw.push(...storyFromUnverifiedClaims(receipt.claims, new Set(actions.map((action) => action.id))));
+    const stamp = (line: StoryLine): StoryLine => ({ ...line, receiptId: line.receiptId ?? receipt.id });
+    raw.push(...storyFromActions(actions).map(stamp));
+    raw.push(...storyFromUnverifiedClaims(receipt.claims, new Set(actions.map((action) => action.id))).map(stamp));
     const stamped = receipt.generatedAt >= window.start && receipt.generatedAt < window.end;
     if (stamped && settings.githubDaily && receipt.github?.optIn === true) {
       const changes = after
         ? receipt.changes.filter((change) => !change.occurredAt || change.occurredAt >= after)
         : receipt.changes;
-      raw.push(...storyFromChanges(receipt.id, changes));
+      raw.push(...storyFromChanges(receipt.id, changes).map(stamp));
     }
   }
   const open = await deps.sessions.getOpen();

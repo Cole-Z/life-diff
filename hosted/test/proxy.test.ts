@@ -20,7 +20,10 @@ describe("classification and names", () => {
     expect(classifyToolName("create_page")).toMatchObject({ effect: "write", tone: "created", verb: "create" });
     expect(classifyToolName("add_upstream")).toMatchObject({ tone: "created" });
     expect(classifyToolName("update_issue")).toMatchObject({ tone: "changed", verb: "update" });
-    expect(classifyToolName("rename_file")).toMatchObject({ tone: "changed", verb: "rename" });
+    expect(classifyToolName("rename_file")).toMatchObject({ tone: "moved", verb: "rename" });
+    expect(classifyToolName("move_event")).toMatchObject({ tone: "moved", verb: "move" });
+    expect(classifyToolName("share_file")).toMatchObject({ tone: "shared", verb: "share" });
+    expect(classifyToolName("trash_file")).toMatchObject({ tone: "removed", verb: "trash" });
     expect(classifyToolName("delete_file")).toMatchObject({ tone: "removed", verb: "delete" });
     expect(classifyToolName("send_message")).toMatchObject({ effect: "write", tone: "removed", verb: "send" });
     expect(classifyToolName("get_or_create")).toMatchObject({ effect: "write", tone: "created" });
@@ -264,10 +267,10 @@ describe("upstream forwarding", () => {
     expect(ended.receipt.actions).toHaveLength(3);
     expect(ended.receipt.actions?.[0]?.summary).toBe("Created page 'Q2 goals' in Notes.");
     expect(ended.receipt.changes).toHaveLength(0);
-    expect(ended.html).toContain("Sent to Notes, not verified");
-    expect(ended.html).toContain("Failed in Notes");
+    expect(ended.html).toContain("Agent said");
+    expect(ended.html).toContain("Failed");
     expect(ended.html).toContain("Sent to a service means Life Diff forwarded the call");
-    expect(ended.html.indexOf("Created page &#39;Q2 goals&#39;")).toBeLessThan(ended.html.indexOf("<details class=\"reads\">"));
+    expect(ended.html.indexOf("Created page &#39;Q2 goals&#39;")).toBeLessThan(ended.html.indexOf("<footer>"));
     expect(ended.html).not.toContain("sekret");
     expect(ended.summary).toContain("Created page 'Q2 goals' in Notes.");
   });
@@ -346,10 +349,8 @@ describe("auto session and upstream secrets", () => {
         arguments: { repoName: "facebook/react" },
       }],
     });
-    expect(html).toContain("<details class=\"reads\">");
-    expect(html).toContain("badge-read");
     expect(html).toContain("1 lookup");
-    expect(html).toContain("DeepWiki");
+    expect(html).not.toContain("read_wiki_structure");
   });
 });
 

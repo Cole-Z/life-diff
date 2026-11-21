@@ -1,4 +1,4 @@
-import { cardRows, headlineFor, type StoryLine } from "./story";
+import { cardRows, footerFor, summaryText, type StoryLine } from "./story";
 
 export const CARD_STORY_LIMIT = 12;
 export const CARD_WRAP_ROWS = 2;
@@ -9,10 +9,10 @@ export interface CardVisualRow {
   bullet: boolean;
 }
 
-const PAPER: Rgb = [243, 239, 230];
-const INK: Rgb = [28, 25, 21];
-const MAST: Rgb = [30, 58, 50];
-const MAST_INK: Rgb = [246, 241, 231];
+const PAGE: Rgb = [16, 14, 12];
+const CARD: Rgb = [28, 25, 22];
+const INK: Rgb = [244, 239, 230];
+const MUTED: Rgb = [163, 152, 136];
 
 type Rgb = [number, number, number];
 
@@ -129,27 +129,43 @@ export function planCard(lines: StoryLine[], width = 720): CardVisualRow[] {
   return body;
 }
 
-export async function renderCardPng(lines: StoryLine[], title: string, caption = "Today"): Promise<Uint8Array> {
+export async function renderCardPng(lines: StoryLine[], title: string, caption = "SESSION DIFF"): Promise<Uint8Array> {
   const width = 720;
   const advance = (GLYPH_W + 1) * SCALE;
-  const maxChars = Math.floor((width - 48) / advance);
-  const headline = wrapCard(headlineFor(lines, caption), maxChars);
+  const maxChars = Math.floor((width - 88) / advance);
+  const headline = wrapCard(title, maxChars, 2);
+  const counts = wrapCard(summaryText(lines), maxChars, 2);
   const body = planCard(lines, width);
+  const footer = wrapCard(footerFor(lines), maxChars, 2);
   const lineH = 26;
-  const mast = 72;
-  const height = mast + 16 + (headline.length + Math.max(body.length, 1)) * lineH + 20;
+  const pad = 28;
+  const height = pad + 22 + headline.length * lineH + (counts[0] ? counts.length * lineH : 0) + 8 + Math.max(body.length, 1) * lineH + footer.length * lineH + pad;
   const pixels = new Uint8Array(width * height * 3);
-  fill(pixels, PAPER);
-  rect(pixels, width, 0, 0, width, mast, MAST);
-  drawText(pixels, width, 20, 14, cardPlain(title), MAST_INK);
-  drawText(pixels, width, 20, 40, cardPlain(caption), MAST_INK);
-  headline.forEach((text, index) => {
-    drawText(pixels, width, 20, mast + 12 + index * lineH, text, INK);
+  fill(pixels, PAGE);
+  roundedRect(pixels, width, 12, 12, width - 24, height - 24, 18, CARD);
+  let y = pad;
+  drawText(pixels, width, 32, y, cardPlain(caption), MUTED);
+  y += 22;
+  headline.forEach((text) => {
+    drawText(pixels, width, 32, y, text, INK);
+    y += lineH;
   });
-  body.forEach((row, index) => {
-    const y = mast + 12 + headline.length * lineH + index * lineH;
-    if (row.bullet) rect(pixels, width, 20, y + 4, 12, 12, hex(row.color));
-    drawText(pixels, width, 40, y, row.text, INK);
+  if (counts[0]) {
+    counts.forEach((text) => {
+      drawText(pixels, width, 32, y, text, INK);
+      y += lineH;
+    });
+  }
+  y += 6;
+  body.forEach((row) => {
+    if (row.bullet) rect(pixels, width, 32, y + 2, 8, 14, hex(row.color));
+    drawText(pixels, width, 48, y, row.text, INK);
+    y += lineH;
+  });
+  footer.forEach((text) => {
+    if (!text) return;
+    drawText(pixels, width, 32, y, text, MUTED);
+    y += lineH;
   });
   return encodePng(width, height, pixels);
 }
@@ -229,6 +245,33 @@ function hex(value: string): Rgb {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+function roundedRect(pixels: Uint8Array, width: number, x: number, y: number, w: number, h: number, radius: number, color: Rgb): void {
+  const height = pixels.length / 3 / width;
+  for (let yy = y; yy < y + h; yy += 1) {
+    if (yy < 0 || yy >= height) continue;
+    for (let xx = x; xx < x + w; xx += 1) {
+      if (xx < 0 || xx >= width) continue;
+      if (!insideRound(xx - x, yy - y, w, h, radius)) continue;
+      const i = (yy * width + xx) * 3;
+      pixels[i] = color[0];
+      pixels[i + 1] = color[1];
+      pixels[i + 2] = color[2];
+    }
+  }
+}
+
+function insideRound(x: number, y: number, w: number, h: number, radius: number): boolean {
+  const r = Math.min(radius, Math.floor(w / 2), Math.floor(h / 2));
+  let dx = 0;
+  let dy = 0;
+  if (x < r) dx = r - x;
+  else if (x >= w - r) dx = x - (w - r - 1);
+  if (y < r) dy = r - y;
+  else if (y >= h - r) dy = y - (h - r - 1);
+  if (dx === 0 || dy === 0) return true;
+  return dx * dx + dy * dy <= r * r;
+}
+
 function fill(pixels: Uint8Array, color: Rgb): void {
   for (let i = 0; i < pixels.length; i += 3) {
     pixels[i] = color[0];
@@ -253,7 +296,7 @@ function rect(pixels: Uint8Array, width: number, x: number, y: number, w: number
 
 /** Map punctuation onto glyphs this bitmap font actually has, then wrap instead of cutting the line off. */
 export function cardPlain(value: string): string {
-  return [...value].map((ch) => (ch === "\u2026" ? "..." : ch === "\u2192" ? "->" : FOLD[ch] ?? ch)).join("");
+  return [...value].map((ch) => (ch === "\u2026" ? "..." : ch === "\u2192" ? "->" : ch === "\u2197" ? ">" : FOLD[ch] ?? ch)).join("");
 }
 
 export function wrapCard(text: string, maxChars: number, maxLines?: number): string[] {

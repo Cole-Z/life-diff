@@ -1,19 +1,19 @@
 import { fold } from "../text";
 import { confidenceReason } from "./confidence";
 import { displayName, serviceFromTool, toolMentioned } from "./names";
-import type { Change, ChangeKind, ClaimInput, ClaimResult, ClaimStatus } from "./types";
+import type { Change, ClaimAction, ClaimInput, ClaimResult, ClaimStatus } from "./types";
 
 interface NormalizedClaim {
   raw: ClaimInput;
   service: string;
   resourceType: string;
-  action: ChangeKind | "";
+  action: ClaimAction | "";
   anyKind: boolean;
   badAction: boolean;
   repo: string;
 }
 
-export function normalizeAction(action: string): ChangeKind | null {
+export function normalizeAction(action: string): ClaimAction | null {
   switch (fold(action)) {
     case "add":
     case "added":
@@ -32,6 +32,14 @@ export function normalizeAction(action: string): ChangeKind | null {
     case "close":
     case "closed":
       return "removed";
+    case "move":
+    case "moved":
+    case "rename":
+    case "renamed":
+      return "moved";
+    case "share":
+    case "shared":
+      return "shared";
     case "modify":
     case "modified":
     case "update":
@@ -40,14 +48,17 @@ export function normalizeAction(action: string): ChangeKind | null {
     case "changed":
     case "edit":
     case "edited":
-    case "move":
-    case "moved":
-    case "rename":
-    case "renamed":
       return "modified";
     default:
       return null;
   }
+}
+
+/** moved and shared still match a modified resource. Older receipts stored those verbs as modified. */
+export function actionsMatch(action: ClaimAction | "", kind: Change["kind"]): boolean {
+  if (!action) return true;
+  if (action === kind) return true;
+  return (action === "moved" || action === "shared") && kind === "modified";
 }
 
 export function applyClaims(changes: Change[], inputs: ClaimInput[] | null): { changes: Change[]; claims: ClaimResult[] } {
@@ -210,7 +221,7 @@ function scoreClaim(claim: NormalizedClaim, change: Change): number {
   } else if (claim.resourceType && claim.resourceType !== change.resourceType) {
     return 0;
   }
-  if (!claim.anyKind && claim.action !== change.kind) return 0;
+  if (!claim.anyKind && !actionsMatch(claim.action, change.kind)) return 0;
   const target = fold(claim.raw.target);
   if (!target) return 0;
   let score = 0;

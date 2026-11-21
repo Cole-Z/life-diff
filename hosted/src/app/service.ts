@@ -4,7 +4,7 @@ import { isGitHubClaimService } from "../receipt/claims";
 import { newId, addDays, addHours, randomToken, validTimeZone } from "../text";
 import { DEFAULT_TIME_ZONE } from "../time";
 import { receiptCardKey, renderCardPng } from "../receipt/card";
-import { condenseLines, storyFromReceipt } from "../receipt/story";
+import { agentTitle, condenseLines, storyFromReceipt, undoPlansFor } from "../receipt/story";
 import { GitHubClient } from "../github/client";
 import { readAfter, takeSnapshot } from "../github/snapshot";
 import type { GitHubApi, GitHubSnapshot } from "../github/types";
@@ -221,7 +221,8 @@ async function commitClose(deps: AppDeps, claim: Extract<CloseClaim, { status: "
   const jsonKey = `receipts/${deps.userId}/${receiptId}.json`;
   const htmlKey = `receipts/${deps.userId}/${receiptId}.html`;
   try {
-    const png = await renderCardPng(condenseLines(storyFromReceipt(receipt), { detail: false }), "Life Diff", "This session");
+    const lines = condenseLines(storyFromReceipt(receipt), { detail: false });
+    const png = await renderCardPng(lines, agentTitle(lines, receipt.timeZone, receipt.session.startedAt, receipt.session.checkedAt), "SESSION DIFF");
     receipt.cardToken = randomToken();
     await deps.objects.putBytes(receiptCardKey(jsonKey), png, "image/png");
   } catch {
@@ -578,12 +579,16 @@ export async function logAction(deps: CoreDeps, input: ActionInput & { sessionId
   });
 }
 
-function claimTone(action: string | undefined): "created" | "changed" | "removed" {
+function claimTone(action: string | undefined): "created" | "changed" | "removed" | "moved" | "shared" {
   switch (action) {
     case "added":
       return "created";
     case "removed":
       return "removed";
+    case "moved":
+      return "moved";
+    case "shared":
+      return "shared";
     default:
       return "changed";
   }
@@ -592,6 +597,8 @@ function claimTone(action: string | undefined): "created" | "changed" | "removed
 function claimVerb(action: string | undefined, before?: string, after?: string): string {
   if (action === "added") return "create";
   if (action === "removed") return "delete";
+  if (action === "moved") return "move";
+  if (action === "shared") return "share";
   if (before && after && (/\b(am|pm)\b/i.test(`${before} ${after}`) || /\d:\d\d/.test(`${before} ${after}`))) return "move";
   return "update";
 }
@@ -634,6 +641,38 @@ function addUnverifiedClaims(receipt: Receipt, claims: ClaimInput[], hasSnapshot
   receipt.claimsChecked = true;
   receipt.claims = [...receipt.claims, ...added];
   receipt.counts = { ...receipt.counts, missingClaims: receipt.counts.missingClaims + added.length };
+}
+
+export async function requestUndo(deps: CoreDeps, input: { receiptId: string; changeId?: string; origin: string }): Promise<{
+  receiptId: string;
+  recorded: "undo requested";
+  undos: ReturnType<typeof undoPlansFor>;
+}> {
+  const loaded = await getReceipt(deps, input.receiptId);
+  const plans = undoPlansFor(loaded.receipt, input.origin);
+  const chosen = input.changeId ? plans.filter((plan) => plan.changeId === input.changeId) : plans;
+  if (input.changeId && chosen.length === 0) throw new AppError("That change is not on this receipt.");
+  if (chosen.length === 0) throw new AppError("Nothing on this receipt has an undo prompt.");
+  const open = await ensureSession(deps);
+  const summary = chosen.length === 1
+    ? `Undo requested. Life Diff did not run it. ${chosen[0]?.prompt ?? ""}`.trim()
+    : `Undo requested for ${chosen.length} changes. Life Diff did not run it.`;
+  await deps.sessions.log(open.id, {
+    id: newId("act", deps.now),
+    loggedAt: deps.now.toISOString(),
+    tool: "undo_request",
+    target: summary.slice(0, 500),
+    source: "proxy",
+    upstream: "Life Diff",
+    effect: "read",
+    tone: "read",
+    verb: "undo",
+    ok: true,
+    status: "undo_requested",
+    summary: summary.slice(0, 500),
+    arguments: { receiptId: input.receiptId, changeIds: chosen.map((plan) => plan.changeId) },
+  });
+  return { receiptId: input.receiptId, recorded: "undo requested", undos: chosen };
 }
 
 export async function getReceipt(deps: CoreDeps, receiptId: string): Promise<{ receipt: Receipt; html: string; meta: ReceiptMeta }> {

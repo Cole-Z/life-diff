@@ -20,7 +20,7 @@ describe("undo hints", () => {
       tone: "created",
       effect: "write",
     });
-    expect(created).toBe("Delete this event");
+    expect(created).toBe("Delete this event from Google Calendar.");
     const sent = reversalHint({
       tool: "send_message",
       upstream: "slack",
@@ -36,7 +36,7 @@ describe("undo hints", () => {
       tone: "changed",
       effect: "write",
     });
-    expect(updated).toBeUndefined();
+    expect(updated).toContain("Google Calendar");
   });
 });
 
@@ -94,13 +94,13 @@ describe("inline receipt", () => {
       linkLabel: "Full receipt",
       imageUrl: "https://lifediff.dev/receipts/rcpt_test/card.png?t=ab",
     });
-    expect(markdown).toContain("🔴");
-    expect(markdown).toContain("⚪");
-    expect(markdown).toContain("**DeepWiki**");
+    expect(markdown).toContain("SESSION DIFF");
+    expect(markdown).toContain("− Removed · GitHub · Verified");
     expect(markdown).toContain("1 lookup");
-    expect(markdown).toContain("Verified in GitHub");
-    expect(markdown).toContain("Undo available");
+    expect(markdown).toContain("Verified");
+    expect(markdown).toContain("[Undo](");
     expect(markdown).not.toContain("Reopen");
+    expect(lines.find((line) => line.undo)?.undo).toContain("Reopen");
     expect(markdown).not.toContain("```diff");
     expect(markdown).not.toContain("card.png");
     expect(markdown).not.toContain("read_wiki");
@@ -150,13 +150,13 @@ describe("roundup", () => {
     });
     await endSession({ ...deps, now: new Date("2026-04-02T16:00:00.000Z") }, {});
     const first = await buildRoundup({ ...deps, now: new Date("2026-04-02T16:05:00.000Z") }, { save: true });
-    expect(first.markdown).toContain("🟢");
-    expect(first.markdown).toContain("Undo available");
-    expect(first.markdown).toContain("Sent to Google Calendar, not verified");
-    expect(first.markdown).toContain("**Google Calendar**");
+    expect(first.markdown).toContain("TODAY");
+    expect(first.markdown).toContain("[Undo](");
+    expect(first.markdown).toContain("Agent said");
+    expect(first.markdown).toContain("Calendar");
     expect(first.markdown).not.toContain("evt_1");
     expect(first.markdown).not.toContain("google_calendar__");
-    expect(first.markdown.startsWith("1 change\n")).toBe(true);
+    expect(first.markdown.startsWith("TODAY\n")).toBe(true);
     expect(first.imageUrl).toContain("/roundup/card.png?t=");
     expect(first.png[0]).toBe(137);
     const id = first.lines.find((line) => line.undo)?.id;

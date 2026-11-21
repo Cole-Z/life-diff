@@ -3,7 +3,8 @@ import { redactStrings, redactText } from "../proxy/redact";
 import { corroborateActions } from "./corroborate";
 import { bytesToBase64, renderCardPng } from "./card";
 import { renderDiffPage } from "./page";
-import { agentTitle, chatText, condenseLines, headlineFor, isQuiet, storyFromActions, storyFromChanges, storyFromReceipt, storyFromUnverifiedClaims, undoHref, visibleActions, type StoryLine } from "./story";
+import { coveredClaimIds } from "./merge";
+import { agentTitle, chatText, condenseLines, headlineFor, isQuiet, storyFromActions, storyFromChanges, storyFromReceipt, storyFromUnverifiedClaims, storySummary, undoHref, visibleActions, type StoryLine, type StorySummary } from "./story";
 import { dayWindow, localClock, type UserSettings } from "../time";
 import type { Receipt } from "./types";
 
@@ -172,18 +173,19 @@ export async function receiptPresentation(deps: CoreDeps, receipt: Receipt, link
     link,
     linkLabel: "Full receipt",
     eyebrow: "SESSION DIFF",
-    title: agentTitle(lines, receipt.timeZone, receipt.session.startedAt, receipt.session.checkedAt),
+    title: agentTitle(lines, receipt.timeZone, receipt.session.startedAt, receipt.session.checkedAt, receipt.agentName),
     timeZone: receipt.timeZone,
     startedAt: receipt.session.startedAt,
     endedAt: receipt.session.checkedAt,
   });
-  const png = await renderCardPng(lines, agentTitle(lines, receipt.timeZone, receipt.session.startedAt, receipt.session.checkedAt), "SESSION DIFF");
+  const title = agentTitle(lines, receipt.timeZone, receipt.session.startedAt, receipt.session.checkedAt, receipt.agentName);
+  const png = await renderCardPng(lines, title, "SESSION DIFF");
   return { markdown: redactText(chat.markdown), png, lines, quiet: chat.quiet, ...(imageUrl ? { imageUrl } : {}) };
 }
 
 /** Lookup-only end_session stays one line and does not hand back a card. get_receipt still can. */
 export function sessionToolPayload(input: {
-  summary: string;
+  summary: StorySummary;
   receipt: Receipt;
   markdown: string;
   url: string;
@@ -191,18 +193,25 @@ export function sessionToolPayload(input: {
   quiet: boolean;
   html?: string;
   includeHtml?: boolean;
+  viewUrl?: string;
 }): Record<string, unknown> {
   const receipt = input.quiet ? omitCardToken(input.receipt) : input.receipt;
+  const lines = condenseLines(storyFromReceipt(input.receipt), { detail: false });
   return {
     summary: input.summary,
     receipt,
     markdown: input.markdown,
     url: input.url,
-    htmlUrl: input.url,
+    htmlUrl: input.viewUrl ?? input.url,
+    ...(input.viewUrl ? { viewUrl: input.viewUrl } : {}),
     ...(!input.quiet && input.imageUrl ? { imageUrl: input.imageUrl } : {}),
     ...(input.includeHtml && input.html ? { html: input.html } : {}),
-    undos: undoEntries(condenseLines(storyFromReceipt(input.receipt), { detail: false }), input.url),
+    undos: undoEntries(lines, input.url),
   };
+}
+
+export function summaryFor(receipt: Receipt): StorySummary {
+  return storySummary(condenseLines(storyFromReceipt(receipt), { detail: false }));
 }
 
 export function undoEntries(lines: StoryLine[], link: string): { changeId: string; prompt: string; summary: string; service: string; url?: string; tool?: string; arguments?: Record<string, unknown>; suggestedTool?: string; suggestedArguments?: Record<string, unknown>; daysLeft?: number }[] {
@@ -220,6 +229,7 @@ export function undoEntries(lines: StoryLine[], link: string): { changeId: strin
       ...(line.undoSuggestedTool ? { suggestedTool: line.undoSuggestedTool } : {}),
       ...(line.undoSuggestedArguments ? { suggestedArguments: line.undoSuggestedArguments } : {}),
       ...(line.undoDaysLeft ? { daysLeft: line.undoDaysLeft } : {}),
+      ...(line.undoRequested ? { requested: true } : {}),
     }];
   });
 }
@@ -249,9 +259,15 @@ async function collectLines(deps: CoreDeps, settings: UserSettings, window: { st
       continue;
     }
     const actions = visibleActions(receipt).filter((action) => action.time >= window.start && action.time < window.end && (!after || action.time >= after));
-    const stamp = (line: StoryLine): StoryLine => ({ ...line, receiptId: line.receiptId ?? receipt.id });
+    const covered = coveredClaimIds(actions, receipt.claims);
+    const requested = new Set(receipt.undoRequestedSeeds ?? []);
+    const stamp = (line: StoryLine): StoryLine => ({
+      ...line,
+      receiptId: line.receiptId ?? receipt.id,
+      ...(requested.has(line.seed) ? { undoRequested: true } : {}),
+    });
     raw.push(...storyFromActions(actions).map(stamp));
-    raw.push(...storyFromUnverifiedClaims(receipt.claims, new Set(actions.map((action) => action.id))).map(stamp));
+    raw.push(...storyFromUnverifiedClaims(receipt.claims, new Set([...actions.map((action) => action.id), ...covered])).map(stamp));
     const stamped = receipt.generatedAt >= window.start && receipt.generatedAt < window.end;
     if (stamped && settings.githubDaily && receipt.github?.optIn === true) {
       const changes = after

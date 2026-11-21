@@ -23,6 +23,7 @@ export function sessionPort(env: Env, userId: string): SessionPort {
     list: (sessionId) => stub.list(sessionId),
     close: (sessionId) => stub.close(sessionId),
     touch: (sessionId, at) => stub.touch(sessionId, at),
+    setAgentName: (sessionId, name) => stub.setAgentName(sessionId, name),
     claimClose: (sessionId) => stub.claimClose(sessionId),
     abortClose: (sessionId) => stub.abortClose(sessionId),
   };

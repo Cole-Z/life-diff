@@ -148,4 +148,8 @@ export interface Receipt {
   actions?: RecordedAction[];
   /** Unguessable token for the public receipt card image. */
   cardToken?: string;
+  /** MCP client name for this session, when the client or the caller provided one. */
+  agentName?: string;
+  /** Story seeds whose undo was requested. Readers of schema 1.0.0 ignore this. */
+  undoRequestedSeeds?: string[];
 }

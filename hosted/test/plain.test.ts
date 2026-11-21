@@ -193,10 +193,10 @@ describe("claim corroboration", () => {
     })]);
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
     expect(lines.find((item) => item.tone === "read")?.readCount).toBe(2);
-    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Agent said");
+    expect(lines.find((item) => item.tone === "read")?.trust).toBe("Sent to DeepWiki");
     const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
     expect(day.markdown).toBe("Nothing changed · 2 lookups");
-    expect(day.lines.find((item) => item.tone === "read")?.trust).toBe("Agent said");
+    expect(day.lines.find((item) => item.tone === "read")?.trust).toBe("Sent to DeepWiki");
     expect(day.markdown).not.toContain("3 lookups");
     expect(day.markdown).not.toContain("Agent says it did this, not verified");
   });
@@ -225,7 +225,7 @@ describe("claim corroboration", () => {
     const reads = lines.filter((item) => item.tone === "read");
     expect(reads).toHaveLength(2);
     expect(reads.map((item) => item.source)).toEqual(["proxy", "claim"]);
-    expect(reads.map((item) => item.trust)).toEqual(["Agent said", "Agent said"]);
+    expect(reads.map((item) => item.trust)).toEqual(["Sent to DeepWiki", "Agent said"]);
     expect(reads.reduce((sum, item) => sum + (item.readCount ?? 1), 0)).toBe(2);
   });
 });

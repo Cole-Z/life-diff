@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { endSession, logAction, requestUndo, sessionPortFromBook, startSession } from "../src/app/service";
+import { endSession, getReceipt, logAction, requestUndo, sessionPortFromBook, startSession } from "../src/app/service";
 import { handleData } from "../src/http/data";
 import { createLifeDiffServer } from "../src/mcp/server";
 import { classifyToolName } from "../src/proxy/classify";
 import { actionsMatch, applyClaims, normalizeAction } from "../src/receipt/claims";
 import { renderHtml } from "../src/receipt/html";
+import { cardRows } from "../src/receipt/story";
 import { condenseLines, footerFor, renderStory, storyFromReceipt, summaryChips, summaryText, type StoryLine } from "../src/receipt/story";
 import { reversalHint, undoPlan } from "../src/receipt/undo";
 import { SessionBook } from "../src/session/book";
@@ -149,6 +150,21 @@ describe("undo_change and undo_session", () => {
     const plans = await requestUndo(deps, { receiptId: ended.receipt.id, origin: "https://lifediff.dev" });
     expect(plans.recorded).toBe("undo requested");
     expect(plans.undos).toHaveLength(2);
+    expect(plans.undos.every((item) => item.requested)).toBe(true);
+    const again = await getReceipt(deps, ended.receipt.id);
+    expect(again.html).toContain("Undo requested");
+    expect(again.receipt.undoRequestedSeeds?.length).toBe(2);
+    const after = condenseLines(storyFromReceipt(again.receipt), { detail: false });
+    const afterStory = renderStory({
+      headline: "",
+      lines: after,
+      link: `https://lifediff.dev/receipts/${ended.receipt.id}`,
+      linkLabel: "Full receipt",
+    });
+    expect(afterStory).toContain("Undo requested");
+    expect(afterStory).not.toContain("[Undo](");
+    expect(cardRows(after).map((row) => row.text).join("\n")).toContain("Undo requested");
+    expect(JSON.stringify(again.receipt)).toContain("undoRequestedSeeds");
     expect(plans.undos.map((item) => item.prompt).join("\n")).toContain("Standup");
     expect(plans.undos.every((item) => item.url.includes(`/receipts/${ended.receipt.id}/undo/`))).toBe(true);
     const one = await requestUndo(deps, { receiptId: ended.receipt.id, changeId: plans.undos[0]?.changeId, origin: "https://lifediff.dev" });

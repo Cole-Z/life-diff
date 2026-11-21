@@ -32,6 +32,7 @@ export interface SessionPort {
   list(sessionId: string): Promise<LoggedAction[]>;
   close(sessionId: string): Promise<void>;
   touch(sessionId: string, at: string): Promise<void>;
+  setAgentName(sessionId: string, name: string): Promise<void>;
   claimClose(sessionId?: string): Promise<CloseClaim>;
   abortClose(sessionId: string): Promise<void>;
 }
@@ -44,6 +45,7 @@ export function sessionPortFromBook(book: SessionBook): SessionPort {
     list: async (sessionId) => book.list(sessionId),
     close: async (sessionId) => book.close(sessionId),
     touch: async (sessionId, at) => book.touch(sessionId, at),
+    setAgentName: async (sessionId, name) => book.setAgentName(sessionId, name),
     claimClose: async (sessionId) => book.claimClose(sessionId),
     abortClose: async (sessionId) => book.abortClose(sessionId),
   };
@@ -80,12 +82,13 @@ const RECENT_CLOSE_MS = 24 * 60 * 60 * 1000;
 const CLOSE_WAIT_MS = 15_000;
 const CLOSE_POLL_MS = 20;
 
-export async function startSession(deps: AppDeps, input: { repos?: string[]; timeZone?: string }): Promise<StartResult> {
+export async function startSession(deps: AppDeps, input: { repos?: string[]; timeZone?: string; agentName?: string }): Promise<StartResult> {
   const requested = namedRepos(input.repos);
   const timeZone = await resolveZone(deps, input.timeZone);
   const open = await deps.sessions.getOpen();
   if (open && sameRepos(open.repos, requested) && !(await sessionIsIdle(deps, open))) {
     await deps.sessions.touch(open.id, deps.now.toISOString());
+    if (input.agentName?.trim()) await deps.sessions.setAgentName(open.id, input.agentName);
     return {
       sessionId: open.id,
       snapshotId: open.snapshotId,
@@ -96,7 +99,7 @@ export async function startSession(deps: AppDeps, input: { repos?: string[]; tim
   }
   if (open) await releaseOpen(deps, open, deps.github);
   if (requested.length === 0) {
-    const session = await startActionSession(deps, timeZone);
+    const session = await startActionSession(deps, timeZone, input.agentName);
     return { sessionId: session.id, snapshotId: session.snapshotId, takenAt: session.startedAt, repos: [], warnings: [] };
   }
   const takenAt = deps.now.toISOString();
@@ -129,6 +132,7 @@ export async function startSession(deps: AppDeps, input: { repos?: string[]; tim
     repos: snapshot.repos.map((repo) => repo.fullName),
     warnings: snapshot.warnings,
     githubOptIn: true,
+    ...(input.agentName?.trim() ? { agentName: input.agentName.trim().slice(0, 80) } : {}),
   };
   await deps.sessions.start(session);
   await deps.meta.insertSession({
@@ -152,7 +156,7 @@ export interface EndResult {
   html: string;
 }
 
-export async function endSession(deps: AppDeps, input: { sessionId?: string; claims?: ClaimInput[]; timeZone?: string; allowGitHubFailure?: boolean }): Promise<EndResult> {
+export async function endSession(deps: AppDeps, input: { sessionId?: string; claims?: ClaimInput[]; timeZone?: string; allowGitHubFailure?: boolean; agentName?: string }): Promise<EndResult> {
   const claim = await deps.sessions.claimClose(input.sessionId);
   switch (claim.status) {
     case "mismatch":
@@ -183,7 +187,7 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
   }
 }
 
-async function commitClose(deps: AppDeps, claim: Extract<CloseClaim, { status: "claimed" }>, input: { sessionId?: string; claims?: ClaimInput[]; timeZone?: string; allowGitHubFailure?: boolean }): Promise<EndResult> {
+async function commitClose(deps: AppDeps, claim: Extract<CloseClaim, { status: "claimed" }>, input: { sessionId?: string; claims?: ClaimInput[]; timeZone?: string; allowGitHubFailure?: boolean; agentName?: string }): Promise<EndResult> {
   const open = claim.session;
   const checkedAt = deps.now.toISOString();
   const logged = claim.actions;
@@ -217,12 +221,14 @@ async function commitClose(deps: AppDeps, claim: Extract<CloseClaim, { status: "
   }
   addUnverifiedClaims(receipt, hasSnapshot ? prepared.filter((claim) => !isGitHubClaimService(claim.service)) : prepared, hasSnapshot);
   attachReadClaims(receipt, folded.readClaims);
+  const agentName = (input.agentName || open.agentName || "").trim().slice(0, 80);
+  if (agentName) receipt.agentName = agentName;
   receipt = redactStrings(receipt);
   const jsonKey = `receipts/${deps.userId}/${receiptId}.json`;
   const htmlKey = `receipts/${deps.userId}/${receiptId}.html`;
   try {
     const lines = condenseLines(storyFromReceipt(receipt), { detail: false });
-    const png = await renderCardPng(lines, agentTitle(lines, receipt.timeZone, receipt.session.startedAt, receipt.session.checkedAt), "SESSION DIFF");
+    const png = await renderCardPng(lines, agentTitle(lines, receipt.timeZone, receipt.session.startedAt, receipt.session.checkedAt, receipt.agentName), "SESSION DIFF");
     receipt.cardToken = randomToken();
     await deps.objects.putBytes(receiptCardKey(jsonKey), png, "image/png");
   } catch {
@@ -376,7 +382,7 @@ function deniedGithub(): GitHubApi {
   };
 }
 
-async function startActionSession(deps: CoreDeps, timeZone?: string): Promise<OpenSession> {
+async function startActionSession(deps: CoreDeps, timeZone?: string, agentName?: string): Promise<OpenSession> {
   const zone = timeZone && validTimeZone(timeZone) ? timeZone : await resolveZone(deps);
   const takenAt = deps.now.toISOString();
   const sessionId = newId("ses", deps.now);
@@ -388,6 +394,7 @@ async function startActionSession(deps: CoreDeps, timeZone?: string): Promise<Op
     timeZone: zone,
     repos: [],
     warnings: [],
+    ...(agentName?.trim() ? { agentName: agentName.trim().slice(0, 80) } : {}),
   };
   await deps.sessions.start(session);
   await deps.meta.insertSession({
@@ -646,12 +653,17 @@ function addUnverifiedClaims(receipt: Receipt, claims: ClaimInput[], hasSnapshot
 export async function requestUndo(deps: CoreDeps, input: { receiptId: string; changeId?: string; origin: string }): Promise<{
   receiptId: string;
   recorded: "undo requested";
-  undos: ReturnType<typeof undoPlansFor>;
+  undos: (ReturnType<typeof undoPlansFor>[number] & { requested: true })[];
 }> {
   const loaded = await getReceipt(deps, input.receiptId);
+  const lines = condenseLines(storyFromReceipt(loaded.receipt), { detail: false });
+  if (input.changeId) {
+    const line = lines.find((item) => item.id === input.changeId);
+    if (!line) throw new AppError("That change is not on this receipt.");
+    if (!line.undo) throw new AppError("Undo is not available for that row. Life Diff only offers undo for a change it logged, forwarded, or verified.");
+  }
   const plans = undoPlansFor(loaded.receipt, input.origin);
   const chosen = input.changeId ? plans.filter((plan) => plan.changeId === input.changeId) : plans;
-  if (input.changeId && chosen.length === 0) throw new AppError("That change is not on this receipt.");
   if (chosen.length === 0) throw new AppError("Nothing on this receipt has an undo prompt.");
   const open = await ensureSession(deps);
   const summary = chosen.length === 1
@@ -672,7 +684,25 @@ export async function requestUndo(deps: CoreDeps, input: { receiptId: string; ch
     summary: summary.slice(0, 500),
     arguments: { receiptId: input.receiptId, changeIds: chosen.map((plan) => plan.changeId) },
   });
-  return { receiptId: input.receiptId, recorded: "undo requested", undos: chosen };
+  const seeds = new Set(loaded.receipt.undoRequestedSeeds ?? []);
+  for (const plan of chosen) {
+    const line = lines.find((item) => item.id === plan.changeId);
+    if (line) seeds.add(line.seed);
+  }
+  loaded.receipt.undoRequestedSeeds = [...seeds];
+  await rewriteReceipt(deps, loaded.meta.jsonKey, loaded.meta.htmlKey, loaded.receipt);
+  const undos = chosen.map((plan) => ({ ...plan, requested: true as const }));
+  return { receiptId: input.receiptId, recorded: "undo requested", undos };
+}
+
+async function rewriteReceipt(deps: CoreDeps, jsonKey: string, htmlKey: string, receipt: Receipt): Promise<void> {
+  const lines = condenseLines(storyFromReceipt(receipt), { detail: false });
+  const html = redactText(renderHtml(receipt));
+  await deps.objects.put(jsonKey, JSON.stringify(receipt), "application/json");
+  await deps.objects.put(htmlKey, html, "text/html; charset=utf-8");
+  if (!receipt.cardToken) return;
+  const png = await renderCardPng(lines, agentTitle(lines, receipt.timeZone, receipt.session.startedAt, receipt.session.checkedAt, receipt.agentName), "SESSION DIFF");
+  await deps.objects.putBytes(receiptCardKey(jsonKey), png, "image/png");
 }
 
 export async function getReceipt(deps: CoreDeps, receiptId: string): Promise<{ receipt: Receipt; html: string; meta: ReceiptMeta }> {

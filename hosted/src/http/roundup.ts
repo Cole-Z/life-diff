@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { readViewGrant } from "../crypto/view-token";
 import { buildRoundup, loadRoundup, roundupCardKey } from "../receipt/roundup";
 import { D1MetadataStore, R2ObjectStore } from "../storage/d1";
 import { coreDeps } from "../app/runtime";
@@ -10,6 +11,8 @@ export async function handleRoundup(request: Request, env: Env): Promise<Respons
   const url = new URL(request.url);
   if (url.pathname === "/roundup/card.png") return serveRoundupCard(env, url.searchParams.get("t") ?? "");
   if (request.method !== "GET") return new Response("Not found", { status: 404 });
+  const viewToken = url.searchParams.get("t");
+  if (viewToken) return serveSignedDay(request, env, viewToken);
   const session = await browserSession(request, env);
   if (!session) return html(renderSignedOut(), 401);
   const dated = /^\/roundup\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);
@@ -24,6 +27,27 @@ export async function handleRoundup(request: Request, env: Env): Promise<Respons
   const day = dated?.[1] ?? today;
   const stored = await loadRoundup(deps, day);
   const roundup = stored ?? await buildRoundup(deps, { date: day, save: day < today, finalize: day < today });
+  return html(roundup.html);
+}
+
+async function serveSignedDay(request: Request, env: Env, token: string): Promise<Response> {
+  const url = new URL(request.url);
+  const grant = await readViewGrant(env.COOKIE_SIGNING_KEY ?? "", token, Math.floor(Date.now() / 1000));
+  const dated = /^\/roundup\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);
+  if (!grant || grant.kind !== "day" || (dated?.[1] && dated[1] !== grant.id)) {
+    return new Response("This link expired or is not valid.", { status: 401 });
+  }
+  const deps = {
+    ...coreDeps(env, { userId: grant.userId, login: "viewer" }),
+    issuer: env.ISSUER,
+    meta: new D1MetadataStore(env.DB),
+    objects: new R2ObjectStore(env.RECEIPTS),
+  };
+  const settings = await deps.meta.getSettings(grant.userId);
+  const today = localClock(deps.now, settings.timeZone).date;
+  const day = grant.id;
+  const stored = day === today ? null : await loadRoundup(deps, day);
+  const roundup = stored ?? await buildRoundup(deps, { date: day, save: false });
   return html(roundup.html);
 }
 

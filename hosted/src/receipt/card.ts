@@ -196,7 +196,14 @@ function parseFont(source: string): Map<string, number[]> {
 
 const EXTRA: Record<string, number[]> = {
   "\u00b7": [0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00],
+  "~": [0x00, 0x00, 0x0a, 0x15, 0x00, 0x00, 0x00],
+  "\u2212": [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
+  "\u2192": [0x00, 0x04, 0x02, 0x1f, 0x02, 0x04, 0x00],
+  "\u2197": [0x07, 0x07, 0x02, 0x04, 0x08, 0x10, 0x00],
 };
+
+/** Symbols the markdown counts use. The card draws each one instead of a stand-in. */
+export const CARD_SYMBOLS = ["~", "\u2212", "\u2192", "\u2197"] as const;
 
 for (const [ch, rows] of Object.entries(EXTRA)) FONT.set(ch, rows);
 
@@ -208,7 +215,6 @@ const FOLD: Record<string, string> = {
   "\u2013": "-",
   "\u2014": "-",
   "\u2015": "-",
-  "\u2212": "-",
   "\u2022": "*",
   "\u00ab": "\"",
   "\u00bb": "\"",
@@ -219,7 +225,6 @@ const FOLD: Record<string, string> = {
   "\u2019": "'",
   "\u201a": "'",
   "\u2026": ".",
-  "\u2192": "-",
 };
 
 /** Font key for a character. Empty means the character is skipped, never drawn as "?". */
@@ -296,7 +301,12 @@ function rect(pixels: Uint8Array, width: number, x: number, y: number, w: number
 
 /** Map punctuation onto glyphs this bitmap font actually has, then wrap instead of cutting the line off. */
 export function cardPlain(value: string): string {
-  return [...value].map((ch) => (ch === "\u2026" ? "..." : ch === "\u2192" ? "->" : ch === "\u2197" ? ">" : FOLD[ch] ?? ch)).join("");
+  return [...value].map((ch) => (ch === "\u2026" ? "..." : FOLD[ch] ?? ch)).join("");
+}
+
+/** True when every symbol the card counts with has its own glyph. */
+export function cardSymbolsCovered(symbols: readonly string[] = CARD_SYMBOLS): boolean {
+  return symbols.every((symbol) => glyphKey(symbol) === symbol && (glyphRows(symbol)?.some((row) => row !== 0) ?? false));
 }
 
 export function wrapCard(text: string, maxChars: number, maxLines?: number): string[] {

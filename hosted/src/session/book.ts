@@ -10,6 +10,8 @@ export interface OpenSession {
   githubOptIn?: boolean;
   /** Last proxied call or start. Idle close uses this, then startedAt. */
   activityAt?: string;
+  /** MCP clientInfo.name, or the agentName passed to start_session. */
+  agentName?: string;
 }
 
 export type ActionSource = "proxy" | "claim";
@@ -146,6 +148,13 @@ export class SessionBook {
     this.state.open = { ...this.state.open, activityAt: at };
   }
 
+  setAgentName(sessionId: string, name: string): void {
+    const open = this.requireOpen(sessionId);
+    const trimmed = name.trim().slice(0, 80);
+    if (!trimmed) return;
+    this.state.open = { ...open, agentName: trimmed };
+  }
+
   list(sessionId: string): LoggedAction[] {
     this.requireOpen(sessionId);
     return this.state.actions.filter((action) => action.sessionId === sessionId).map((action) => copyAction(action));
@@ -243,6 +252,7 @@ function parseOpen(raw: unknown): OpenSession | null {
     warnings: Array.isArray(record.warnings) ? record.warnings.filter((item): item is string => typeof item === "string") : [],
     ...(record.githubOptIn === true ? { githubOptIn: true } : {}),
     ...(typeof record.activityAt === "string" ? { activityAt: record.activityAt } : {}),
+    ...(typeof record.agentName === "string" && record.agentName.trim() ? { agentName: record.agentName.trim().slice(0, 80) } : {}),
   };
 }
 

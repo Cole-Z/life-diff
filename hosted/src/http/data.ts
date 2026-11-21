@@ -1,6 +1,7 @@
 import { coreDeps } from "../app/runtime";
 import { AppError, getReceipt, logAction } from "../app/service";
 import { eraseUser, oauthServer } from "../auth/worker";
+import { readViewGrant } from "../crypto/view-token";
 import type { Env } from "../env";
 import { receiptCardKey } from "../receipt/card";
 import { renderUndoPage } from "../receipt/page";
@@ -12,6 +13,11 @@ export async function handleData(request: Request, env: Env): Promise<Response> 
   const url = new URL(request.url);
   const cardMatch = url.pathname.match(/^\/receipts\/([^/]+)\/card\.png$/);
   if (request.method === "GET" && cardMatch?.[1]) return serveReceiptCard(env, decodeURIComponent(cardMatch[1]), url.searchParams.get("t") ?? "");
+  const viewed = url.pathname.match(/^\/receipts\/([^/]+)$/);
+  const viewToken = url.searchParams.get("t");
+  if (request.method === "GET" && viewed?.[1] && viewToken) {
+    return serveSignedReceipt(env, decodeURIComponent(viewed[1]), viewToken);
+  }
   const undoMatch = url.pathname.match(/^\/receipts\/([^/]+)\/undo(?:\/([^/]+))?$/);
   if (request.method === "GET" && undoMatch?.[1]) {
     const undoAuth = await requireUser(request, env, url);
@@ -89,6 +95,21 @@ async function serveUndo(env: Env, auth: { userId: string; login: string }, rece
     if (changeId && chosen.length === 0) return new Response("Not found", { status: 404 });
     const html = renderUndoPage({ receiptId: result.receipt.id, plans: chosen });
     return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } });
+  } catch (error) {
+    const message = error instanceof AppError ? error.message : "Life Diff could not finish that request.";
+    const status = error instanceof AppError ? 404 : 500;
+    return new Response(message, { status });
+  }
+}
+
+async function serveSignedReceipt(env: Env, id: string, token: string): Promise<Response> {
+  const grant = await readViewGrant(env.COOKIE_SIGNING_KEY ?? "", token, Math.floor(Date.now() / 1000));
+  if (!grant || grant.kind !== "receipt" || grant.id !== id) {
+    return new Response("This link expired or is not valid.", { status: 401 });
+  }
+  try {
+    const result = await getReceipt(coreDeps(env, { userId: grant.userId, login: "viewer" }), id);
+    return new Response(result.html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } });
   } catch (error) {
     const message = error instanceof AppError ? error.message : "Life Diff could not finish that request.";
     const status = error instanceof AppError ? 404 : 500;

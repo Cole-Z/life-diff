@@ -108,7 +108,14 @@ describe("redaction", () => {
     ].join(" ");
     const cleaned = redactText(question);
     for (const shape of ["hunter2", ...shapes]) expect(cleaned).not.toContain(shape);
-    expect(cleaned).toContain("[redacted]");
+    expect(cleaned).toContain("api_key=[redacted]");
+    expect(cleaned).toContain("password=[redacted]");
+    expect(cleaned).toContain("Authorization: Bearer [redacted]");
+    expect(cleaned).not.toContain("Authorization=[redacted]");
+    expect(redactText("password: hunter2")).toBe("password: [redacted]");
+    expect(redactText("password=hunter2")).toBe("password=[redacted]");
+    expect(redactText("Authorization: Bearer ghp_1234567890abcdefghijklmnop")).toBe("Authorization: Bearer [redacted]");
+    expect(redactText("authorization=Bearer ghp_1234567890abcdefghijklmnop")).toBe("authorization=Bearer [redacted]");
     const prose = "How does React reconcile a token bucket with a password reset email? The keynote covered the public API and a cookie recipe: chocolate chip.";
     expect(redactText(prose)).toBe(prose);
 

@@ -3,7 +3,8 @@ import { endSession, logAction, recordProxyCall, sessionPortFromBook, startSessi
 import { classifyToolName } from "../src/proxy/classify";
 import { forwardToolCall, toolFailure } from "../src/proxy/forward";
 import { redactSnippet } from "../src/proxy/redact";
-import { planCard, renderCardPng } from "../src/receipt/card";
+import { glyphRows, planCard, renderCardPng } from "../src/receipt/card";
+import { phraseAction } from "../src/receipt/phrase";
 import { claimSentence } from "../src/receipt/present";
 import { receiptPresentation, buildRoundup, sessionToolPayload } from "../src/receipt/roundup";
 import { cardRows, chatText, condenseLines, headlineFor, isQuiet, renderStory, storyFromReceipt, trustLabel, type StoryLine } from "../src/receipt/story";
@@ -215,6 +216,8 @@ describe("7. soft errors", () => {
     const lines = condenseLines(storyFromReceipt(ended.receipt), { detail: false });
     expect(lines[0]?.tone).toBe("failed");
     expect(lines[0]?.summary).toBe("Failed in Notes. Quota exceeded");
+    expect(lines[0]?.trust).toBe("Failed in Notes");
+    expect(lines[0]?.trust).not.toContain("Sent to");
     const markdown = renderStory({
       headline: headlineFor(lines, "This session"),
       lines,
@@ -226,6 +229,30 @@ describe("7. soft errors", () => {
     expect(markdown).not.toContain("Failed in Notes. ·");
     expect(cardRows(lines)[0]?.text).toContain("Quota exceeded");
     expect(cardRows(lines)[0]?.text).not.toContain("Sent to");
+    const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
+    const failed = day.lines.find((line) => line.tone === "failed");
+    expect(failed?.trust).toBe("Failed in Notes");
+    expect(JSON.stringify(day.lines)).not.toContain("Sent to Notes");
+  });
+
+  it("keeps Error when it is part of the sentence", () => {
+    const classification = classifyToolName("ask_question");
+    const kept = phraseAction({
+      upstream: "deepwiki",
+      tool: "ask_question",
+      classification,
+      ok: false,
+      error: "Error processing question: the wiki timed out",
+    });
+    expect(kept).toBe("Failed in DeepWiki. Error processing question: the wiki timed out");
+    const labeled = phraseAction({
+      upstream: "deepwiki",
+      tool: "ask_question",
+      classification,
+      ok: false,
+      error: "Error - the wiki timed out",
+    });
+    expect(labeled).toBe("Failed in DeepWiki. The wiki timed out");
   });
 });
 
@@ -336,6 +363,38 @@ describe("qa follow-ups", () => {
     expect(long.length).toBeGreaterThan(0);
   });
 
+  it("draws +N more on the session card and the daily card", async () => {
+    const book = new SessionBook();
+    const meta = new MemoryMetadataStore();
+    const deps = base(book, meta);
+    await startSession(deps, {});
+    for (let index = 0; index < 13; index += 1) {
+      await recordProxyCall(deps, {
+        upstream: "notes",
+        tool: "create_page",
+        args: { title: `Page ${index}` },
+        ok: true,
+        status: "ok",
+        summary: `Created page ${index}.`,
+        classification: { effect: "write", tone: "created", verb: "create" },
+        durationMs: 1,
+      });
+    }
+    const ended = await endSession(deps, {});
+    const session = await receiptPresentation(deps, ended.receipt, "https://lifediff.dev/receipts/rcpt");
+    const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false });
+    expect(session.lines.length).toBeGreaterThan(12);
+    expect(day.lines.length).toBeGreaterThan(12);
+    expect(planCard(session.lines).some((row) => row.text === "+1 more")).toBe(true);
+    expect(planCard(day.lines).some((row) => row.text === "+1 more")).toBe(true);
+    const sessionPixels = await decodePng(session.png);
+    const dayPixels = await decodePng(day.png);
+    expect(seesInkText(sessionPixels.rgb, sessionPixels.width, sessionPixels.height, "+1 more")).toBe(true);
+    expect(seesInkText(dayPixels.rgb, dayPixels.width, dayPixels.height, "+1 more")).toBe(true);
+    expect(seesCaption(sessionPixels.rgb, sessionPixels.width, "This session")).toBe(true);
+    expect(seesCaption(dayPixels.rgb, dayPixels.width, "Today")).toBe(true);
+  });
+
   it("names the trust on lookup rows only when sources are mixed", () => {
     const mixed = condenseLines([
       ...Array.from({ length: 7 }, (_, index) => story("read", "DeepWiki", "proxy", false, `Looked up ${index}`)),
@@ -382,9 +441,14 @@ describe("qa follow-ups", () => {
       story("changed", "Google Calendar", "claim", true, "Moved the call"),
       story("failed", "Notion", "proxy", false, "Failed in Notion"),
     ];
-    expect(headlineFor(lines, "This session")).toBe("3 changes, 2 need a look");
-    expect(headlineFor(lines, "Today")).toBe("3 changes, 2 need a look");
+    expect(headlineFor(lines, "This session")).toBe("3 changes, 1 needs a look · 1 failed");
+    expect(headlineFor(lines, "Today")).toBe("3 changes, 1 needs a look · 1 failed");
     expect(headlineFor([story("changed", "Google Calendar", "claim", true, "Moved the call")], "Today")).toBe("1 change needs a look");
+    expect(headlineFor([
+      story("changed", "Google Calendar", "claim", true, "Moved the call"),
+      story("failed", "DeepWiki", "proxy", false, "Failed in DeepWiki"),
+    ], "Today")).toBe("1 change needs a look · 1 failed");
+    expect(headlineFor([story("failed", "DeepWiki", "proxy", false, "Failed in DeepWiki")], "This session")).toBe("1 failed call");
   });
 });
 
@@ -511,7 +575,7 @@ function hasColor(rgb: Uint8Array, color: [number, number, number]): boolean {
   return false;
 }
 
-async function decodePng(png: Uint8Array): Promise<{ rgb: Uint8Array }> {
+async function decodePng(png: Uint8Array): Promise<{ width: number; height: number; rgb: Uint8Array }> {
   const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
   const width = view.getUint32(16);
   const height = view.getUint32(20);
@@ -536,5 +600,41 @@ async function decodePng(png: Uint8Array): Promise<{ rgb: Uint8Array }> {
   for (let y = 0; y < height; y += 1) {
     rgb.set(raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)), y * stride);
   }
-  return { rgb };
+  return { width, height, rgb };
+}
+
+function seesCaption(rgb: Uint8Array, width: number, text: string): boolean {
+  return textAt(rgb, width, 20, 40, text, [246, 241, 231]);
+}
+
+function seesInkText(rgb: Uint8Array, width: number, height: number, text: string): boolean {
+  const advance = 12;
+  const glyphH = 14;
+  const need = text.length * advance;
+  for (let y = 0; y <= height - glyphH; y += 2) {
+    for (let x = 0; x <= width - need; x += 2) {
+      if (textAt(rgb, width, x, y, text, [28, 25, 21])) return true;
+    }
+  }
+  return false;
+}
+
+function textAt(rgb: Uint8Array, width: number, x: number, y: number, text: string, color: [number, number, number]): boolean {
+  const advance = 12;
+  for (let index = 0; index < text.length; index += 1) {
+    const rows = glyphRows(text[index] ?? "");
+    if (!rows) continue;
+    for (let row = 0; row < rows.length; row += 1) {
+      const bits = rows[row] ?? 0;
+      for (let col = 0; col < 5; col += 1) {
+        const on = (bits & (1 << (4 - col))) !== 0;
+        const px = x + index * advance + col * 2;
+        const py = y + row * 2;
+        const at = (py * width + px) * 3;
+        const ink = rgb[at] === color[0] && rgb[at + 1] === color[1] && rgb[at + 2] === color[2];
+        if (on !== ink) return false;
+      }
+    }
+  }
+  return true;
 }

@@ -110,6 +110,55 @@ describe("the local day", () => {
     expect(shown.markdown).toContain("acme/app");
   });
 
+  it("keeps one heading when lookups for a repository are not consecutive", async () => {
+    const store = new MemoryMetadataStore();
+    const objects = new MemoryObjectStore();
+    const book = new SessionBook();
+    const deps = {
+      userId: "42",
+      login: "octocat",
+      now: new Date("2026-04-02T16:00:00.000Z"),
+      timeZone: "UTC",
+      maxRepos: 25,
+      receiptRetentionDays: 90,
+      snapshotRetentionHours: 24,
+      abandonedSessionDays: 7,
+      github: closingIssue(),
+      sessions: sessionPortFromBook(book),
+      meta: store,
+      objects,
+    };
+    await startSession(deps, {});
+    const reads: { at: string; repo: string; path: string }[] = [
+      { at: "2026-04-02T16:00:00.000Z", repo: "facebook/react", path: "a" },
+      { at: "2026-04-02T16:05:00.000Z", repo: "vuejs/core", path: "b" },
+      { at: "2026-04-02T16:10:00.000Z", repo: "facebook/react", path: "c" },
+    ];
+    for (const read of reads) {
+      deps.now = new Date(read.at);
+      await recordProxyCall(deps, {
+        upstream: "deepwiki",
+        tool: "read_wiki_contents",
+        args: { repo: read.repo, path: read.path },
+        ok: true,
+        status: "ok",
+        summary: `Looked up ${read.repo}.`,
+        classification: { effect: "read", tone: "read", verb: "read" },
+        durationMs: 2,
+      });
+    }
+    await endSession(deps, {});
+    const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false, detail: true });
+    const headings = day.markdown.split("\n").map((line) => line.trim()).filter((line) => line === "facebook/react");
+    expect(headings).toEqual(["facebook/react"]);
+    const vueAt = day.markdown.indexOf("vuejs/core");
+    const beforeVue = day.markdown.slice(0, vueAt);
+    expect(beforeVue.split("facebook/react").length - 1).toBe(3);
+    const repoHeads = [...day.html.matchAll(/class="repo">([^<]+)/g)].map((match) => match[1]);
+    expect(repoHeads.filter((head) => head === "facebook/react")).toEqual(["facebook/react"]);
+    expect(repoHeads.indexOf("facebook/react")).toBeLessThan(repoHeads.indexOf("vuejs/core"));
+  });
+
   it("deletes history and keeps upstream servers", async () => {
     const store = new MemoryMetadataStore();
     const objects = new MemoryObjectStore();

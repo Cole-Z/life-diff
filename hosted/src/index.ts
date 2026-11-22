@@ -1,6 +1,6 @@
 import { createMcpHandler } from "agents/mcp/server";
 import { insufficientScope, OAuthResourceServer } from "@cloudflare/workers-oauth-provider";
-import { oauthServer, handleApp, AuthServer } from "./auth/worker";
+import { oauthServer, handleApp, AuthServer, validateLifeDiffToken } from "./auth/worker";
 import { SCOPES } from "./constants";
 import type { AuthProps, Env } from "./env";
 import { handleData } from "./http/data";
@@ -41,10 +41,7 @@ function resourceServer(env: Env): OAuthResourceServer<Env, AuthProps> {
       resource_name: "Life Diff",
     },
     requiredScopes: [...SCOPES],
-    validateToken: (bound) => {
-      if (bound.AUTH_SERVER) return bound.AUTH_SERVER.validateToken.bind(bound.AUTH_SERVER);
-      return (resource, token) => oauthServer(bound).validateToken(resource, token, bound);
-    },
+    validateToken: (bound) => (resource, token) => validateLifeDiffToken(bound, resource, token),
     handler: {
       async fetch(request, bound, ctx) {
         if (!SCOPES.every((scope) => ctx.auth.scope.includes(scope))) {

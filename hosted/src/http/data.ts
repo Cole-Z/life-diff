@@ -1,16 +1,19 @@
 import { coreDeps } from "../app/runtime";
 import { AppError, getReceipt, logAction } from "../app/service";
-import { eraseUser, oauthServer } from "../auth/worker";
+import { validateLifeDiffToken } from "../auth/worker";
 import { readViewGrant } from "../crypto/view-token";
 import type { Env } from "../env";
 import { receiptCardKey } from "../receipt/card";
 import { renderUndoPage } from "../receipt/page";
 import { undoPlansFor } from "../receipt/story";
 import { D1MetadataStore, R2ObjectStore } from "../storage/d1";
-import { browserSession } from "./session";
+import { browserSession, viewGrantIsCurrent } from "./session";
+
+const privateReceiptHeaders = { "cache-control": "private, no-store", "referrer-policy": "no-referrer" };
 
 export async function handleData(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  if (url.pathname === "/v1/me") return new Response("Not found", { status: 404 });
   const cardMatch = url.pathname.match(/^\/receipts\/([^/]+)\/card\.png$/);
   if (request.method === "GET" && cardMatch?.[1]) return serveReceiptCard(env, decodeURIComponent(cardMatch[1]), url.searchParams.get("t") ?? "");
   const viewed = url.pathname.match(/^\/receipts\/([^/]+)$/);
@@ -28,10 +31,6 @@ export async function handleData(request: Request, env: Env): Promise<Response> 
   const auth = await requireUser(request, env, url);
   if (auth instanceof Response) return auth;
   try {
-    if (request.method === "DELETE" && url.pathname === "/v1/me") {
-      await eraseUser(env, auth.userId);
-      return Response.json({ deleted: true });
-    }
     const actionMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/actions$/);
     if (request.method === "POST" && actionMatch?.[1]) {
       if (!auth.scope.includes("sessions:write")) return new Response("sessions:write is required", { status: 403 });
@@ -55,9 +54,9 @@ export async function handleData(request: Request, env: Env): Promise<Response> 
       if (!auth.scope.includes("receipts:read")) return new Response("receipts:read is required", { status: 403 });
       const result = await getReceipt(coreDeps(env, auth), decodeURIComponent(receiptMatch[1]));
       if (url.pathname.endsWith(".json") || request.headers.get("accept")?.includes("application/json")) {
-        return Response.json(result.receipt);
+        return Response.json(result.receipt, { headers: privateReceiptHeaders });
       }
-      return new Response(result.html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } });
+      return new Response(result.html, { headers: { ...privateReceiptHeaders, "content-type": "text/html; charset=utf-8" } });
     }
   } catch (error) {
     const message = error instanceof AppError ? error.message : "Life Diff could not finish that request.";
@@ -76,9 +75,7 @@ async function requireUser(request: Request, env: Env, url: URL): Promise<{ user
     if (session) return { userId: session.sub, login: session.login, scope: ["receipts:read"] };
   }
   if (!token) return new Response("Sign in required", { status: 401 });
-  const validated = env.AUTH_SERVER
-    ? await env.AUTH_SERVER.validateToken(env.MCP_SERVER_URL, token)
-    : await oauthServer(env).validateToken(env.MCP_SERVER_URL, token, env);
+  const validated = await validateLifeDiffToken(env, env.MCP_SERVER_URL, token);
   if (!validated?.props.userId || !validated.props.login) return new Response("Sign in required", { status: 401 });
   return { userId: validated.props.userId, login: validated.props.login, scope: validated.scope ?? [] };
 }
@@ -94,7 +91,7 @@ async function serveUndo(env: Env, auth: { userId: string; login: string }, rece
     const chosen = changeId ? plans.filter((plan) => plan.changeId === changeId) : plans;
     if (changeId && chosen.length === 0) return new Response("Not found", { status: 404 });
     const html = renderUndoPage({ receiptId: result.receipt.id, plans: chosen });
-    return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } });
+    return new Response(html, { headers: { ...privateReceiptHeaders, "content-type": "text/html; charset=utf-8" } });
   } catch (error) {
     const message = error instanceof AppError ? error.message : "Life Diff could not finish that request.";
     const status = error instanceof AppError ? 404 : 500;
@@ -107,8 +104,11 @@ async function serveSignedReceipt(env: Env, id: string, token: string): Promise<
   if (!grant || grant.kind !== "receipt" || grant.id !== id) {
     return signedReceiptResponse("This link expired or is not valid.", 401);
   }
+  const meta = new D1MetadataStore(env.DB);
   try {
+    if (!await viewGrantIsCurrent(meta, grant)) return signedReceiptResponse("This link expired or is not valid.", 401);
     const result = await getReceipt(coreDeps(env, { userId: grant.userId, login: "viewer" }), id);
+    if (!await viewGrantIsCurrent(meta, grant)) return signedReceiptResponse("This link expired or is not valid.", 401);
     return signedReceiptResponse(result.html);
   } catch (error) {
     const message = error instanceof AppError ? error.message : "Life Diff could not finish that request.";
@@ -121,16 +121,16 @@ function signedReceiptResponse(body: string, status = 200): Response {
     status,
     headers: {
       "content-type": status === 200 ? "text/html; charset=utf-8" : "text/plain; charset=utf-8",
-      "cache-control": "private, no-store",
-      "referrer-policy": "no-referrer",
+      ...privateReceiptHeaders,
     },
   });
 }
 
 async function serveReceiptCard(env: Env, id: string, token: string): Promise<Response> {
   if (!/^[a-f0-9]{32}$/.test(token)) return new Response("Not found", { status: 404 });
-  const located = await new D1MetadataStore(env.DB).findReceipt(id);
-  if (!located) return new Response("Not found", { status: 404 });
+  const meta = new D1MetadataStore(env.DB);
+  const located = await meta.findReceipt(id);
+  if (!located || !await meta.getAccessVersions(located.userId)) return new Response("Not found", { status: 404 });
   const objects = new R2ObjectStore(env.RECEIPTS);
   const json = await objects.get(located.jsonKey);
   let cardToken = "";
@@ -142,5 +142,5 @@ async function serveReceiptCard(env: Env, id: string, token: string): Promise<Re
   if (cardToken !== token) return new Response("Not found", { status: 404 });
   const png = await objects.getBytes(receiptCardKey(located.jsonKey));
   if (!png) return new Response("Not found", { status: 404 });
-  return new Response(png, { headers: { "content-type": "image/png", "cache-control": "private, no-store", "referrer-policy": "no-referrer" } });
+  return new Response(png, { headers: { ...privateReceiptHeaders, "content-type": "image/png" } });
 }

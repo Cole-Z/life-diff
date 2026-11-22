@@ -210,7 +210,7 @@ describe("7. soft errors", () => {
     const book = new SessionBook();
     const deps = base(book);
     const target = { name: "notes", url: "https://mcp.example/mcp" };
-    await forwardToolCall(deps, toolFetch({ content: [{ type: "text", text: "Error: quota exceeded" }] }), target, "create_page", { title: "Launch" });
+    await forwardToolCall(deps, toolFetch({ content: [{ type: "text", text: "Error: quota exceeded" }] }), target, "create_page", { title: "Launch" }, new Set([target.url]));
     const logged = book.list(book.getOpen()!.id);
     expect(logged[0]?.ok).toBe(false);
     expect(logged[0]?.summary).toBe("Failed in Notes");

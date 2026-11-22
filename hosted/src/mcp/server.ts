@@ -1,12 +1,13 @@
 import { HOSTED_VERSION, SCOPES } from "../constants";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { appDeps, coreDeps, sessionStub } from "../app/runtime";
+import { appDeps, coreDeps } from "../app/runtime";
 import { ACTION_VALUES } from "../actions/log";
-import { clearHistory, endSession, getReceipt, listReceipts, logAction, requestUndo, startSession, AppError } from "../app/service";
+import { endSession, getReceipt, listReceipts, logAction, requestUndo, startSession, AppError } from "../app/service";
 import type { Env } from "../env";
 import { clientName } from "./client-name";
-import { invalidateUpstreamCache, registerUpstreamTools } from "./upstream-tools";
+import { invalidateUpstreamCache, registerUpstreamTools, upstreamDiscoveryNotice } from "./upstream-tools";
+import { approvedUpstreamEndpoints } from "../proxy/namespace";
 import { addUpstream, listPublicUpstreams, removeUpstream } from "../proxy/upstreams";
 import { D1MetadataStore } from "../storage/d1";
 import type { ClaimInput } from "../receipt/types";
@@ -101,6 +102,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
       const who = user();
       const now = new Date();
       const core = coreDeps(env, who, now);
+      const versions = await core.meta.getAccessVersions(who.userId);
       const open = await core.sessions.getOpen();
       const deps = open?.snapshotKey ? await appDeps(env, who, now) : { ...core, github: idleGithub() };
       const agentName = input.agentName?.trim() || clientName(server, ctx);
@@ -112,7 +114,8 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
       });
       const link = receiptUrl(env, result.receipt.id);
       const shown = await receiptPresentation(core, result.receipt, link);
-      const signed = await signedView(env, "receipt", result.receipt.id, who.userId);
+      const token = await signedViewToken(env, "receipt", result.receipt.id, who.userId, versions?.historyVersion);
+      const signed = token ? viewUrl(env.ISSUER, "receipt", result.receipt.id, token) : undefined;
       const payload = sessionToolPayload({
         summary: summaryFor(result.receipt),
         receipt: result.receipt,
@@ -165,10 +168,12 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
     async (input) => run(async () => {
       const who = user();
       const deps = coreDeps(env, who);
+      const versions = await deps.meta.getAccessVersions(who.userId);
       const result = await getReceipt(deps, input.receiptId);
       const link = receiptUrl(env, result.receipt.id);
       const shown = await receiptPresentation(deps, result.receipt, link);
-      const signed = await signedView(env, "receipt", result.receipt.id, who.userId);
+      const token = await signedViewToken(env, "receipt", result.receipt.id, who.userId, versions?.historyVersion);
+      const signed = token ? viewUrl(env.ISSUER, "receipt", result.receipt.id, token) : undefined;
       const payload = {
         summary: summaryFor(result.receipt),
         receipt: result.receipt,
@@ -214,7 +219,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "add_upstream",
     {
-      description: "Register an MCP server so its tools are called through Life Diff and recorded. Tools are named <name>__<tool>. The token is stored encrypted and is not returned. Reconnect if the client cached the tool list.",
+      description: "Register an approved MCP endpoint so its tools are called through Life Diff and recorded. Tools are named <name>__<tool>. The token is stored encrypted and is not returned. Reconnect if the client cached the tool list.",
       inputSchema: z.object({
         name: z.string(),
         url: z.string(),
@@ -224,7 +229,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
     },
     async (input) => run(async () => {
       const who = user();
-      const added = await addUpstream(new D1MetadataStore(env.DB), who.userId, env.TOKEN_ENCRYPTION_KEY, new Date(), input);
+      const added = await addUpstream(new D1MetadataStore(env.DB), who.userId, env.TOKEN_ENCRYPTION_KEY, new Date(), approvedUpstreamEndpoints(env), input);
       invalidateUpstreamCache(who.userId);
       try { server.sendToolListChanged(); } catch { /* stateless clients need to reconnect */ }
       return text(`Registered ${added.name} for discovery. Refresh or reconnect and look for ${added.name}__<tool>. If none appear, check the endpoint and credentials and try discovery again.`, { upstream: added, discoveryStatus: "pending", reconnect: true });
@@ -237,8 +242,18 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
       inputSchema: z.object({}),
     },
     async () => run(async () => {
-      const upstreams = await listPublicUpstreams(new D1MetadataStore(env.DB), user().userId);
-      return text(upstreams.map((item) => `${item.name} ${item.url}`).join("\n") || "No upstreams yet.", { upstreams });
+      const who = user();
+      const saved = await listPublicUpstreams(new D1MetadataStore(env.DB), who.userId, approvedUpstreamEndpoints(env));
+      const upstreams = saved.map((item) => {
+        const discoveryNotice = item.status === "approved" ? upstreamDiscoveryNotice(who.userId, item) : undefined;
+        return discoveryNotice ? { ...item, discoveryNotice } : item;
+      });
+      const lines = upstreams.map((item) => {
+        if (item.status === "blocked") return `${item.name} (blocked by the endpoint policy)`;
+        const notice = "discoveryNotice" in item ? ` · ${item.discoveryNotice}` : "";
+        return `${item.name} ${item.url}${notice}`;
+      });
+      return text(lines.join("\n") || "No upstreams yet.", { upstreams });
     }),
   );
   server.registerTool(
@@ -255,19 +270,6 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
       return text(`Removed ${input.name}. Reconnect if its tools are still listed.`, { removed: input.name, reconnect: true });
     }),
   );
-  server.registerTool(
-    "clear_my_history",
-    {
-      description: "Delete this account's sessions, receipts, and daily diffs. Does not remove upstream servers or the GitHub sign-in. Requires confirm true.",
-      inputSchema: z.object({ confirm: z.boolean() }),
-    },
-    async (input) => run(async () => {
-      if (input.confirm !== true) throw new AppError("Pass confirm: true to delete your Life Diff history.");
-      const who = user();
-      await clearHistory(coreDeps(env, who), () => sessionStub(env, who.userId).wipe());
-      return text("Your Life Diff history was deleted. Upstream servers and the GitHub sign-in are still there.", { deleted: true });
-    }),
-  );
   try {
     await registerUpstreamTools(server, env, user());
   } catch {
@@ -281,6 +283,7 @@ function dailyHandler(env: Env) {
     const who = user();
     const now = new Date();
     const deps = await depsForDaily(env, who, now);
+    const versions = await deps.meta.getAccessVersions(who.userId);
     const roundup = await buildRoundup(
       { ...deps, issuer: env.ISSUER },
       {
@@ -292,13 +295,13 @@ function dailyHandler(env: Env) {
       },
     );
     const origin = env.ISSUER.replace(/\/$/, "");
-    const signed = await signedView(env, "day", roundup.day, who.userId);
+    const token = await signedViewToken(env, "day", roundup.day, who.userId, versions?.historyVersion);
     return shownContent(roundup.markdown, roundup.quiet ? new Uint8Array() : roundup.png, {
       day: roundup.day,
       since: roundup.since,
       url: `${origin}/roundup/${roundup.day}`,
-      ...(signed ? { viewUrl: signed } : {}),
-      ...(roundup.imageUrl ? { imageUrl: roundup.imageUrl } : {}),
+      ...(token ? { viewUrl: viewUrl(origin, "day", roundup.day, token) } : {}),
+      ...(token && roundup.cardToken ? { imageUrl: `${origin}/roundup/card.png?t=${encodeURIComponent(token)}` } : {}),
       lines: roundup.lines.map((line) => ({
         service: line.service,
         source: line.source,
@@ -339,12 +342,11 @@ function idleGithub(): GitHubApi {
   };
 }
 
-async function signedView(env: Env, kind: "receipt" | "day", id: string, userId: string): Promise<string | undefined> {
+async function signedViewToken(env: Env, kind: "receipt" | "day", id: string, userId: string, historyVersion: string | undefined): Promise<string | undefined> {
   const key = env.COOKIE_SIGNING_KEY ?? "";
-  if (key.trim().length < 32) return undefined;
+  if (key.trim().length < 32 || historyVersion === undefined) return undefined;
   try {
-    const token = await signViewGrant(key, { kind, id, userId }, Math.floor(Date.now() / 1000));
-    return viewUrl(env.ISSUER, kind, id, token);
+    return await signViewGrant(key, { kind, id, userId, historyVersion }, Math.floor(Date.now() / 1000));
   } catch {
     return undefined;
   }

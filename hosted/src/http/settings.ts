@@ -5,6 +5,7 @@ import type { Env } from "../env";
 import { renderSettings, renderSignedOut } from "./pages";
 import { browserSession } from "./session";
 import { addUpstream, listPublicUpstreams, removeUpstream } from "../proxy/upstreams";
+import { approvedUpstreamEndpoints } from "../proxy/namespace";
 import { invalidateUpstreamCache } from "../mcp/upstream-tools";
 import { parseDayEnd } from "../time";
 import { validTimeZone } from "../text";
@@ -14,12 +15,13 @@ export async function handleSettings(request: Request, env: Env): Promise<Respon
   const session = await browserSession(request, env);
   if (!session) return html(renderSignedOut("Settings"), 401);
   const meta = new D1MetadataStore(env.DB);
+  const endpoints = approvedUpstreamEndpoints(env);
   try {
     if (request.method === "POST" && url.pathname === "/settings") {
       const form = await request.formData();
-      if (form.get("csrf") !== session.csrf) return html(await page(meta, session, "The form did not match this session."), 400);
+      if (form.get("csrf") !== session.csrf) return html(await page(meta, endpoints, session, "The form did not match this session."), 400);
       const token = String(form.get("token") ?? "");
-      await addUpstream(meta, session.sub, env.TOKEN_ENCRYPTION_KEY, new Date(), {
+      await addUpstream(meta, session.sub, env.TOKEN_ENCRYPTION_KEY, new Date(), endpoints, {
         name: String(form.get("name") ?? ""),
         url: String(form.get("url") ?? ""),
         ...(token.trim() ? { token } : {}),
@@ -29,22 +31,22 @@ export async function handleSettings(request: Request, env: Env): Promise<Respon
     }
     if (request.method === "POST" && url.pathname === "/settings/remove") {
       const form = await request.formData();
-      if (form.get("csrf") !== session.csrf) return html(await page(meta, session, "The form did not match this session."), 400);
+      if (form.get("csrf") !== session.csrf) return html(await page(meta, endpoints, session, "The form did not match this session."), 400);
       await removeUpstream(meta, session.sub, String(form.get("name") ?? ""));
       invalidateUpstreamCache(session.sub);
       return redirect("/settings");
     }
     if (request.method === "POST" && url.pathname === "/settings/preferences") {
       const form = await request.formData();
-      if (form.get("csrf") !== session.csrf) return html(await page(meta, session, "The form did not match this session."), 400);
+      if (form.get("csrf") !== session.csrf) return html(await page(meta, endpoints, session, "The form did not match this session."), 400);
       const timeZone = String(form.get("timeZone") ?? "").trim();
       const dayEnd = String(form.get("dayEnd") ?? "").trim();
-      if (!validTimeZone(timeZone)) return html(await page(meta, session, "Time zone must be an IANA name such as America/Chicago."), 400);
-      if (!parseDayEnd(dayEnd)) return html(await page(meta, session, "End of workday must be a time such as 18:00."), 400);
+      if (!validTimeZone(timeZone)) return html(await page(meta, endpoints, session, "Time zone must be an IANA name such as America/Chicago."), 400);
+      if (!parseDayEnd(dayEnd)) return html(await page(meta, endpoints, session, "End of workday must be a time such as 18:00."), 400);
       const current = await meta.getSettings(session.sub);
       const idleMinutes = Number(form.get("idleMinutes"));
       if (!Number.isInteger(idleMinutes) || idleMinutes < 5 || idleMinutes > 180) {
-        return html(await page(meta, session, "Quiet minutes must be a whole number from 5 to 180."), 400);
+        return html(await page(meta, endpoints, session, "Quiet minutes must be a whole number from 5 to 180."), 400);
       }
       await meta.saveSettings(session.sub, {
         ...current,
@@ -58,8 +60,8 @@ export async function handleSettings(request: Request, env: Env): Promise<Respon
     }
     if (request.method === "POST" && url.pathname === "/settings/clear") {
       const form = await request.formData();
-      if (form.get("csrf") !== session.csrf) return html(await page(meta, session, "The form did not match this session."), 400);
-      if (form.get("confirm") !== "yes") return html(await page(meta, session, "Check the box to delete your history."), 400);
+      if (form.get("csrf") !== session.csrf) return html(await page(meta, endpoints, session, "The form did not match this session."), 400);
+      if (form.get("confirm") !== "yes") return html(await page(meta, endpoints, session, "Check the box to delete your history."), 400);
       await clearHistory({
         userId: session.sub,
         meta,
@@ -68,15 +70,15 @@ export async function handleSettings(request: Request, env: Env): Promise<Respon
       return redirect("/settings");
     }
     if (request.method !== "GET" || url.pathname !== "/settings") return new Response("Not found", { status: 404 });
-    return html(await page(meta, session));
+    return html(await page(meta, endpoints, session));
   } catch (error) {
     const message = error instanceof AppError ? error.message : "Life Diff could not save that.";
-    return html(await page(meta, session, message), 400);
+    return html(await page(meta, endpoints, session, message), 400);
   }
 }
 
-async function page(meta: D1MetadataStore, session: { sub: string; login: string; csrf: string }, error?: string): Promise<string> {
-  const upstreams = await listPublicUpstreams(meta, session.sub);
+async function page(meta: D1MetadataStore, endpoints: ReadonlySet<string>, session: { sub: string; login: string; csrf: string }, error?: string): Promise<string> {
+  const upstreams = await listPublicUpstreams(meta, session.sub, endpoints);
   const settings = await meta.getSettings(session.sub);
   return renderSettings(session.login, session.csrf, upstreams, settings, error);
 }

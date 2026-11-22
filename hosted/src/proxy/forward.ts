@@ -11,12 +11,12 @@ export interface ToolReply {
   _meta?: Record<string, unknown>;
 }
 
-export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, target: UpstreamTarget, tool: string, args: unknown, client?: string): Promise<ToolReply> {
+export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, target: UpstreamTarget, tool: string, args: unknown, endpoints: ReadonlySet<string>, client?: string): Promise<ToolReply> {
   const started = Date.now();
   const classification = classifyToolName(tool);
   const secrets = target.auth?.value ? [target.auth.value] : [];
   try {
-    const result = await callUpstreamTool(fetchImpl, target, tool, args);
+    const result = await callUpstreamTool(fetchImpl, target, tool, args, endpoints);
     const durationMs = Date.now() - started;
     const failure = toolFailure(result);
     const resultText = scrubSecrets(firstText(result), secrets);

@@ -1,8 +1,10 @@
 # Copy to .dev.vars for `wrangler dev`. Never commit .dev.vars.
 # Local URLs must stay on loopback. The production values live in wrangler.toml.
 
+ENVIRONMENT=development
 ISSUER=http://localhost:8787
 MCP_SERVER_URL=http://localhost:8787/mcp
+APPROVED_UPSTREAM_ENDPOINTS=https://mcp.deepwiki.com/mcp
 GITHUB_APP_CLIENT_ID=replace-with-github-app-client-id
 GITHUB_APP_CLIENT_SECRET=replace-with-github-app-client-secret
 GITHUB_APP_SLUG=replace-with-github-app-slug

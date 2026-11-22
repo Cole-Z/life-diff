@@ -1,3 +1,4 @@
+import { historyObjectKeys } from "../storage/retention";
 import { actionsToClaims, validateAction, type ActionInput } from "../actions/log";
 import { serviceFromTool } from "../receipt/names";
 import { isGitHubClaimService } from "../receipt/claims";
@@ -497,7 +498,7 @@ export async function sealOpenSession(deps: AppDeps): Promise<void> {
 }
 
 export async function clearHistory(deps: { userId: string; meta: CoreDeps["meta"]; objects: CoreDeps["objects"] }, wipe: () => Promise<void>): Promise<void> {
-  const keys = [...await deps.meta.userObjectKeys(deps.userId), `users/${deps.userId}/roundup.json`];
+  const keys = await historyObjectKeys(deps.meta, deps.objects, deps.userId);
   await deps.objects.delete(keys);
   await wipe();
   await deps.meta.clearHistory(deps.userId);

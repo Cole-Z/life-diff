@@ -6,7 +6,7 @@ Life Diff records calls routed through it and changes an agent explicitly report
 
 A signed-in user registers upstream MCP servers, either on `https://lifediff.dev/settings` or with the MCP tools `add_upstream`, `list_upstreams`, and `remove_upstream`.
 
-Each upstream is a streamable HTTP URL plus an optional bearer token or static header. The secret is encrypted with `TOKEN_ENCRYPTION_KEY` (AES-GCM, the same pattern as the GitHub token) and stored in D1. It is not written to logs and it is not returned by `list_upstreams` or the settings page.
+Each upstream uses an operator-approved Streamable HTTP endpoint plus an optional bearer token or static authentication header. The public demo approves `https://mcp.deepwiki.com/mcp`. The proxy stops at redirects and requires the final approved URL without embedded credentials, queries, or fragments. The secret is encrypted with `TOKEN_ENCRYPTION_KEY` (AES-GCM, the same pattern as the GitHub token) and stored in D1. It is not written to logs and it is not returned by `list_upstreams` or the settings page.
 
 `https://lifediff.dev/mcp` keeps the existing tools (`start_session`, `log_action`, `end_session`, `get_receipt`, `list_receipts`) and exposes discovered upstream tools as `<upstream>__<tool>`. `tools/list` and `tools/call` are forwarded. Life Diff starts an MCP session with the upstream (`initialize`, `notifications/initialized`, and the `mcp-session-id` header) and accepts either a JSON body or an SSE `event: message` body.
 

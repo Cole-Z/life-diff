@@ -103,8 +103,14 @@ export interface DailyDiffRow {
   updatedAt: string;
 }
 
+export interface AccessVersions {
+  accountVersion: string;
+  historyVersion: string;
+}
+
 export interface MetadataStore {
-  upsertUser(user: { id: string; login: string; now: string }): Promise<void>;
+  upsertUser(user: { id: string; login: string; now: string }): Promise<AccessVersions>;
+  getAccessVersions(userId: string): Promise<AccessVersions | null>;
   saveCredentials(row: CredentialRow): Promise<void>;
   getCredentials(userId: string): Promise<CredentialRow | null>;
   replaceInstallations(userId: string, rows: InstallationRow[], now: string): Promise<void>;

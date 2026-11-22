@@ -8,7 +8,7 @@ Nothing in this repository deploys the Worker or creates the GitHub App. The ste
 
 ## First deploy checklist
 
-`wrangler.toml` already has the production KV id, the D1 database id, `workers_dev = false`, and the active `lifediff.dev` route. `GITHUB_APP_SLUG` is `life-diff`. `GITHUB_APP_CLIENT_ID` is still the placeholder until it is filled in on this branch. Do not commit secret values.
+`wrangler.toml` already has the production KV id, the D1 database id, `workers_dev = false`, and the active `lifediff.dev` route. `GITHUB_APP_SLUG` is `life-diff`. Check that `GITHUB_APP_CLIENT_ID` identifies the installed read-only Life Diff app. Do not commit secret values.
 
 1. Enable R2 in the Cloudflare dashboard, then create the R2 bucket `life-diff-receipts`.
 2. From `hosted/`, set the three Worker secrets:
@@ -29,6 +29,16 @@ npx wrangler deploy
 4. Add `https://lifediff.dev/mcp` as a remote MCP server.
 
 The GitHub App also needed a private key generated so GitHub would allow the install. The Worker never uses that key.
+
+## Owner rollout checklist
+
+1. Apply `0005_access_versions.sql` to the configured D1 database before deploying the Worker. Use the [migration and deployment commands above](#first-deploy-checklist). Existing approved MCP grants and browser sessions continue to work. The new Worker requires fresh signed HTML and daily image links.
+2. Confirm in Cloudflare that the receipt R2 bucket has no public custom domain or public `r2.dev` URL. In GitHub, verify the installed App has **read-only Metadata, Contents, Pull requests, and Issues**, with access limited to the intended repositories. [GitHub App setup](#create-the-github-app)
+3. In a signed-out browser, open `/sample-receipt` and `/privacy`. Expect the synthetic receipt and the browser-only history and account controls on the updated privacy page. Verify a signed-out `/mcp` request still returns the OAuth challenge.
+4. In an authorized ChatGPT workspace, sign in, refresh the connector catalog, and follow the [DeepWiki smoke test](../docs/connect.md#first-lookup) in a clean session. Confirm use of Life Diff's `deepwiki__read_wiki_structure` for `facebook/react`. Close the session and verify one lookup, zero changes, and a card when fetching the saved receipt.
+5. Review and configure Cloudflare rate limits separately. Start with an auth rule for `/oauth/register`, `/oauth/token`, `/authorize`, and `/callback`. Keep the well-known metadata URLs outside that rule. Use a separate, more generous rule for `/mcp` so a client can initialize, list tools, refresh its catalog, and make calls in a burst. Measure the actual connector traffic before setting thresholds. With IP-based limits, account for shared connector egress. Use a short mitigation window and a programmatic response such as HTTP 429 where available. Check Cloudflare Security Events and repeat sign-in, tool discovery, and the lookup after enabling the rules. If your plan supports only one rule, prioritize the auth endpoints and measure MCP traffic before adding MCP enforcement. [Cloudflare WAF rate limiting](https://developers.cloudflare.com/waf/rate-limiting-rules/) · [Rate limiting best practices](https://developers.cloudflare.com/waf/rate-limiting-rules/best-practices/)
+
+The Worker uses manual redirect handling for upstream fetches to keep credential headers on the approved endpoint. [Cloudflare Request redirect behavior](https://developers.cloudflare.com/workers/runtime-apis/request/)
 
 ## Domain
 
@@ -65,23 +75,26 @@ MCP tools, all of which require the scopes `receipts:read` and `sessions:write`:
 - `get_receipt` returns one stored receipt, including its card.
 - `log_action` records a change made outside Life Diff. Skip reads, and skip a tool already called through Life Diff. Life Diff does not run the tool. Optional `before`, `after`, and `url` name the old value, the new value, and a link.
 - `list_receipts` lists receipt metadata.
-- `add_upstream` registers an upstream MCP server (name, https URL, optional token or header). The token is encrypted and not returned.
-- `list_upstreams` lists name, URL, and whether a token is stored.
+- `add_upstream` registers an approved final upstream endpoint and optionally an encrypted credential.
+- `list_upstreams` lists saved names, approval status, and whether a token is stored. Only approved entries include a URL.
 - `remove_upstream` removes one by name.
-- `clear_my_history` deletes sessions, receipts, and daily diffs when `confirm` is true. It leaves upstreams and the GitHub sign-in in place. The settings page has the same button.
 
 The same `/mcp` endpoint discovers upstream tools and exposes them as `<name>__<tool>`. The beta forwards text and object-valued structured results. Capture failures are reported alongside the upstream result. Signed-in browsers manage the same list at `/settings`. After adding an upstream, reconnect the MCP client if it cached the tool list.
 
-`0002_upstreams.sql` creates the `upstreams` table. `0003_daily.sql` adds `sessions.github_opt_in`, `user_settings` (time zone, end of workday, GitHub daily toggle), and `daily_diffs`. Apply migrations before deploying this Worker, from `hosted/`:
-
-```bash
-npx wrangler d1 migrations apply life-diff --remote
-npx wrangler deploy
-```
-
-The same action log is available as `POST /v1/sessions/:id/actions` with the Life Diff bearer token. `DELETE /v1/me` deletes the account. Signed-in browsers can use `POST /account/delete` (the account page includes a CSRF token).
+The action log is also available as `POST /v1/sessions/:id/actions` with a Life Diff bearer token. History clearing and account deletion require browser sign-in, a matching CSRF token, and confirmation on Settings or Account.
 
 `log_action` records a change the agent made outside Life Diff. The service comes from the tool name (`google_calendar` is Google Calendar). A claim is compared with GitHub only when the service is GitHub and this session has a snapshot. Anything else stays on the receipt as reported, not verified. A read claim that matches a call this session already forwarded is counted once with that call. Unknown actions do not match. One claim matches one change.
+
+## Approved upstream endpoints
+
+The hosted demo approves `https://mcp.deepwiki.com/mcp` by default. Self-hosters can set the Worker variable `APPROVED_UPSTREAM_ENDPOINTS` to a comma-separated list of exact final HTTPS endpoints. The variable replaces the default list. An empty value disables upstream forwarding.
+
+```toml
+[vars]
+APPROVED_UPSTREAM_ENDPOINTS = "https://mcp.deepwiki.com/mcp,https://tools.example.test/mcp"
+```
+
+Use endpoints you trust to receive credentials and the tool arguments. Specify the full host and path without embedded credentials, query strings, or fragments. Put credentials in the encrypted token field. Both discovery and execution stop at redirects. A previously saved endpoint outside the policy appears as blocked, without its URL, and can be removed. For local development, loopback endpoints must be explicitly listed, with `ENVIRONMENT=development` and a loopback `ISSUER` in `.dev.vars`.
 
 ## Receipts
 
@@ -100,7 +113,7 @@ Each GitHub account has one shared open session. The default 20-minute idle pref
 | R2 `life-diff-receipts` | Snapshot JSON, receipt JSON, receipt HTML |
 | KV `OAUTH_KV` | MCP grants and tokens issued by Life Diff |
 
-MCP grant props are only `{ userId, login }`. `userId` is the numeric GitHub id. The GitHub access token is encrypted with AES-GCM under the `TOKEN_ENCRYPTION_KEY` secret and stored in D1. It is not copied into the grant.
+MCP grant props include the GitHub user ID, login, and account version. D1 checks the account version on each authenticated request. `userId` is the numeric GitHub id. The GitHub access token is encrypted with AES-GCM under the `TOKEN_ENCRYPTION_KEY` secret and stored in D1. It is not copied into the grant.
 
 Retention defaults:
 

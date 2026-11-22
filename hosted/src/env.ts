@@ -15,12 +15,14 @@ export interface Env {
   ABANDONED_SESSION_DAYS: string;
   MAX_REPOS: string;
   ENVIRONMENT: string;
+  APPROVED_UPSTREAM_ENDPOINTS?: string;
   AUTH_SERVER?: AuthServerBinding;
 }
 
 export interface AuthProps {
   userId: string;
   login: string;
+  accountVersion?: string;
 }
 
 export interface AuthServerBinding {

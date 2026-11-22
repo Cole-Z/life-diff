@@ -1,12 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { encryptString } from "../src/crypto/aesgcm";
 import { endSession, ensureSession, logAction, recordProxyCall, sessionPortFromBook } from "../src/app/service";
 import { forwardToolCall } from "../src/proxy/forward";
 import { classifyToolName, plainAction } from "../src/proxy/classify";
 import { callUpstreamTool, listUpstreamTools, parseSse } from "../src/proxy/client";
-import { namespaceTool, splitNamespaced } from "../src/proxy/namespace";
+import { approvedUpstreamEndpoints, DEEPWIKI_ENDPOINT, namespaceTool, splitNamespaced } from "../src/proxy/namespace";
 import { pickSubject, redactText, redactValue } from "../src/proxy/redact";
-import { addUpstream, listPublicUpstreams } from "../src/proxy/upstreams";
+import { addUpstream, listPublicUpstreams, loadTargets } from "../src/proxy/upstreams";
 import { renderHtml } from "../src/receipt/html";
 import { buildRoundup, receiptPresentation, summaryFor } from "../src/receipt/roundup";
 import { SessionBook } from "../src/session/book";
@@ -14,6 +14,7 @@ import { MemoryMetadataStore, MemoryObjectStore } from "../src/storage/memory";
 import type { GitHubApi } from "../src/github/types";
 
 const now = new Date("2026-04-02T15:00:00.000Z");
+const fixtureEndpoints = new Set(["https://mcp.deepwiki.com/mcp", "https://mcp.example/mcp", "https://scratch.example.test/mcp"]);
 const KEY = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64");
 
 describe("classification and names", () => {
@@ -194,14 +195,49 @@ describe("upstream forwarding", () => {
       });
     };
     const target = { name: "deepwiki", url: "https://mcp.deepwiki.com/mcp", auth: { header: "Authorization", value: "Bearer sekret-value" } };
-    const tools = await listUpstreamTools(fetchImpl, target);
+    const tools = await listUpstreamTools(fetchImpl, target, fixtureEndpoints);
     expect(tools.map((tool) => namespaceTool("deepwiki", tool.name))).toEqual(["deepwiki__read_wiki_structure"]);
-    const result = await callUpstreamTool(fetchImpl, target, "read_wiki_structure", { repoName: "facebook/react" });
+    const result = await callUpstreamTool(fetchImpl, target, "read_wiki_structure", { repoName: "facebook/react" }, fixtureEndpoints);
     expect(JSON.stringify(result)).toContain("facebook/react");
     const calls = seen.filter((item) => item.method === "tools/call" || item.method === "tools/list");
     expect(calls.every((item) => item.session === "sess-1")).toBe(true);
     expect(calls.every((item) => item.authorization === "Bearer sekret-value")).toBe(true);
     expect(parseSse(`event: message\ndata: {"jsonrpc":"2.0","id":9,"result":{"ok":true}}\n\n`)[0]).toMatchObject({ id: 9 });
+  });
+
+  it.each(["initialize", "notifications/initialized", "tools/list", "tools/call"])("blocks a redirect during %s at the original endpoint", async (step) => {
+    const target = { name: "deepwiki", url: DEEPWIKI_ENDPOINT, auth: { header: "X-Fixture-Key", value: "fixture-credential" } };
+    const location = "https://redirect.example.test/?secret=fixture-location";
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      const message = JSON.parse(String(init?.body)) as { id: number; method: string };
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("X-Fixture-Key")).toBe("fixture-credential");
+      if (message.method === step) return new Response("fixture-response-content", { status: 307, headers: { location } });
+      if (message.method === "notifications/initialized") return new Response(null, { status: 202 });
+      return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-03-26" } });
+    });
+    const book = new SessionBook();
+    const deps = { ...baseDeps(book, new MemoryMetadataStore()), github: idleGithub() };
+    const message = "The upstream redirected. Configure the final HTTPS endpoint.";
+    if (step !== "tools/call") {
+      await expect(listUpstreamTools(fetchImpl, target, fixtureEndpoints)).rejects.toThrow(message);
+    } else {
+      const reply = await forwardToolCall(deps, fetchImpl, target, "read_wiki_structure", { repoName: "facebook/react" }, fixtureEndpoints);
+      expect(reply).toMatchObject({ isError: true, content: [{ text: message }, { type: "text" }] });
+      const closed = await endSession(deps, {});
+      expect(closed.receipt.actions?.[0]?.error).toBe(message);
+      expect(JSON.stringify(closed)).not.toMatch(/fixture-credential|fixture-location|fixture-response-content/);
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(step === "initialize" ? 1 : step === "notifications/initialized" ? 2 : 3);
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(Array(fetchImpl.mock.calls.length).fill(DEEPWIKI_ENDPOINT));
+  });
+
+  it("blocks an out-of-policy target at discovery and dispatch before sending credentials", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const target = { name: "old", url: "https://fixture.example.test/mcp", auth: { header: "Authorization", value: "Bearer fake" } };
+    await expect(listUpstreamTools(fetchImpl, target, fixtureEndpoints)).rejects.toThrow(/endpoint is not approved/);
+    await expect(callUpstreamTool(fetchImpl, target, "read_wiki_structure", {}, fixtureEndpoints)).rejects.toThrow(/endpoint is not approved/);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("records a forwarded call, opens a session, and still records a failure", async () => {
@@ -236,14 +272,14 @@ describe("upstream forwarding", () => {
       });
     };
     const target = { name: "notes", url: "https://mcp.example/mcp", auth: { header: "Authorization", value: "Bearer sekret-value" } };
-    const ok = await forwardToolCall(deps, fetchImpl, target, "create_page", { title: "Q2 goals", token: "sekret-value" });
+    const ok = await forwardToolCall(deps, fetchImpl, target, "create_page", { title: "Q2 goals", token: "sekret-value" }, fixtureEndpoints);
     expect(ok.isError).toBeUndefined();
     expect(ok.content[0]?.text).toContain("created");
     expect(ok._meta).toEqual({ sessionId: book.getOpen()?.id, captureStatus: "recorded" });
     expect(ok.content.at(-1)?.text).toBe(`Life Diff session ${book.getOpen()?.id}.`);
     expect(ok.content.at(-1)?._meta).toEqual({ sessionId: book.getOpen()?.id });
     expect(book.getOpen()?.snapshotKey).toBe("");
-    const failed = await forwardToolCall({ ...deps, now: new Date("2026-04-02T15:05:00.000Z") }, fetchImpl, target, "delete_page", { title: "Q2 goals" });
+    const failed = await forwardToolCall({ ...deps, now: new Date("2026-04-02T15:05:00.000Z") }, fetchImpl, target, "delete_page", { title: "Q2 goals" }, fixtureEndpoints);
     expect(failed.isError).toBe(true);
     expect(failed.content[0]?.text).not.toContain("sekret-value");
     expect(failed._meta?.sessionId).toBe(book.getOpen()?.id);
@@ -284,7 +320,7 @@ describe("upstream forwarding", () => {
     const reply = await forwardToolCall(deps, upstreamFixture(() => {
       upstreamCalls += 1;
       return { isError: false, content: [{ type: "text", text: "Ticket moved to Passed." }], structuredContent: { state: "Passed" } };
-    }), scratch, "update_issue", { id: "QA-42" });
+    }), scratch, "update_issue", { id: "QA-42" }, fixtureEndpoints);
     expect(upstreamCalls).toBe(1);
     expect(reply.isError).toBe(false);
     expect(reply.structuredContent).toEqual({ state: "Passed" });
@@ -306,7 +342,7 @@ describe("upstream forwarding", () => {
     ];
     const reply = await forwardToolCall(deps, upstreamFixture(() => ({
       isError: true, content: blocks, structuredContent: { reason: "Invalid field", code: 422 },
-    })), scratch, "update_issue", { id: "QA-43" });
+    })), scratch, "update_issue", { id: "QA-43" }, fixtureEndpoints);
     expect(reply).toMatchObject({ isError: true, structuredContent: { reason: "Invalid field", code: 422 } });
     expect(reply.content.map((block) => block.type)).toEqual(["text", "text", "text"]);
     expect(reply.content[0]?.text).toBe("Invalid field.");
@@ -323,8 +359,8 @@ describe("upstream forwarding", () => {
     const deps = { ...baseDeps(book, meta), github: idleGithub() };
     const fetchImpl = upstreamFixture(() => ({ content: [{ type: "text", text: "Wiki outline" }] }));
     const calls = await Promise.all([
-      forwardToolCall(deps, fetchImpl, scratch, "read_wiki_structure", { repoName: "facebook/react" }, "Client A"),
-      forwardToolCall(deps, fetchImpl, scratch, "read_wiki_structure", { repoName: "facebook/react" }, "Client B"),
+      forwardToolCall(deps, fetchImpl, scratch, "read_wiki_structure", { repoName: "facebook/react" }, fixtureEndpoints, "Client A"),
+      forwardToolCall(deps, fetchImpl, scratch, "read_wiki_structure", { repoName: "facebook/react" }, fixtureEndpoints, "Client B"),
     ]);
     expect(meta.sessions.size).toBe(1);
     expect(calls[0]._meta?.sessionId).toBe(calls[1]._meta?.sessionId);
@@ -345,7 +381,7 @@ describe("upstream forwarding", () => {
   it("records a call finishing after close in the next session and includes each receipt in the day", async () => {
     const deps = { ...baseDeps(new SessionBook(), new MemoryMetadataStore()), github: idleGithub() };
     const fast = upstreamFixture(() => ({ content: [{ type: "text", text: "Updated scratch item" }] }));
-    const first = await forwardToolCall(deps, fast, scratch, "update_issue", { id: "QA-42" }, "Client A");
+    const first = await forwardToolCall(deps, fast, scratch, "update_issue", { id: "QA-42" }, fixtureEndpoints, "Client A");
     let inFlight!: () => void;
     let complete!: () => void;
     const called = new Promise<void>((resolve) => { inFlight = resolve; });
@@ -355,7 +391,7 @@ describe("upstream forwarding", () => {
       await release;
       return { content: [{ type: "text", text: "Scratch lookup" }] };
     });
-    const pending = forwardToolCall(deps, slow, scratch, "get_issue", { id: "QA-42" }, "Client B");
+    const pending = forwardToolCall(deps, slow, scratch, "get_issue", { id: "QA-42" }, fixtureEndpoints, "Client B");
     await called;
     const sessionId = String(first._meta?.sessionId);
     const closed = await endSession(deps, { sessionId });
@@ -400,9 +436,43 @@ describe("auto session and upstream secrets", () => {
     expect(ended.receipt.actions?.[0]?.source).toBe("proxy");
   });
 
+  it("only approves configured final endpoints and quarantines unsafe saved URLs", async () => {
+    const env = { ENVIRONMENT: "production", ISSUER: "https://lifediff.dev" };
+    const endpoints = approvedUpstreamEndpoints(env);
+    expect([...endpoints]).toEqual([DEEPWIKI_ENDPOINT]);
+    const meta = new MemoryMetadataStore();
+    const unsafe = [
+      "https://unsupported.example.test/mcp",
+      "https://mcp.deepwiki.com/other-path",
+      `${DEEPWIKI_ENDPOINT}?key=fixture-query`,
+      `${DEEPWIKI_ENDPOINT}#fixture-fragment`,
+      "https://user:fixture-password@mcp.deepwiki.com/mcp",
+      "http://127.0.0.1:9000/mcp",
+    ];
+    for (const [index, url] of unsafe.entries()) {
+      const name = `fixture-${index}`;
+      await expect(addUpstream(meta, "42", KEY, now, endpoints, { name, url })).rejects.toThrow(/approved final HTTPS endpoint/);
+      await meta.insertUpstream({ id: name, userId: "42", name, url, createdAt: now.toISOString() });
+    }
+    await expect(addUpstream(meta, "42", KEY, now, endpoints, {
+      name: "header", url: DEEPWIKI_ENDPOINT, token: "fixture-token", header: "Host",
+    })).rejects.toThrow(/authentication header/);
+    expect(await loadTargets(meta, "42", KEY, endpoints)).toEqual([]);
+    const saved = await listPublicUpstreams(meta, "42", endpoints);
+    expect(saved).toHaveLength(unsafe.length);
+    expect(saved.every((item) => item.status === "blocked" && !("url" in item))).toBe(true);
+    expect(JSON.stringify(saved)).not.toMatch(/fixture-query|fixture-fragment|fixture-password/);
+
+    const local = "http://127.0.0.1:9000/mcp";
+    const configured = { ...env, APPROVED_UPSTREAM_ENDPOINTS: `${DEEPWIKI_ENDPOINT},${local}` };
+    expect([...approvedUpstreamEndpoints(configured)]).toEqual([DEEPWIKI_ENDPOINT]);
+    expect([...approvedUpstreamEndpoints({ ...configured, ENVIRONMENT: "development" })]).toEqual([DEEPWIKI_ENDPOINT]);
+    expect([...approvedUpstreamEndpoints({ ...configured, ENVIRONMENT: "development", ISSUER: "http://localhost:8787" })]).toEqual([DEEPWIKI_ENDPOINT, local]);
+  });
+
   it("stores an upstream token encrypted and does not return it", async () => {
     const meta = new MemoryMetadataStore();
-    const added = await addUpstream(meta, "42", KEY, now, {
+    const added = await addUpstream(meta, "42", KEY, now, fixtureEndpoints, {
       name: "deepwiki",
       url: "https://mcp.deepwiki.com/mcp",
       token: "sekret-value",
@@ -413,7 +483,7 @@ describe("auto session and upstream secrets", () => {
     expect(stored?.authEnc).toBeTruthy();
     expect(stored?.authEnc).not.toContain("sekret-value");
     expect(await encryptString(KEY, "sekret-value")).not.toBe(stored?.authEnc);
-    const listed = await listPublicUpstreams(meta, "42");
+    const listed = await listPublicUpstreams(meta, "42", fixtureEndpoints);
     expect(JSON.stringify(listed)).not.toContain("sekret-value");
     expect(listed[0]?.hasToken).toBe(true);
     const html = renderHtml({

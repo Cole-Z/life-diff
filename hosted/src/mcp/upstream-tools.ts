@@ -51,7 +51,7 @@ export async function registerUpstreamTools(server: McpServer, env: Env, user: {
         const reply = await forwardToolCall(coreDeps(env, user), fetchImpl, target, tool.name, args, clientName(server, ctx));
         return {
           content: reply.content,
-          ...(reply.isError ? { isError: true } : {}),
+          ...(reply.isError !== undefined ? { isError: reply.isError } : {}),
           ...(reply.structuredContent ? { structuredContent: reply.structuredContent } : {}),
           ...(reply._meta ? { _meta: reply._meta } : {}),
         };

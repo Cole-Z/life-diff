@@ -37,7 +37,7 @@ export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, t
       ...(storedError ? { error: storedError } : {}),
       ...(client ? { client } : {}),
     });
-    return withSession(replyFrom(result, target.name, tool), sessionId);
+    return withCapture(replyFrom(result, target.name, tool, failure.failed), sessionId);
   } catch (error) {
     const durationMs = Date.now() - started;
     const message = scrubSecrets(error instanceof UpstreamError || error instanceof Error ? error.message : "The upstream call failed.", secrets);
@@ -54,7 +54,7 @@ export async function forwardToolCall(deps: CoreDeps, fetchImpl: typeof fetch, t
       error: message,
       ...(client ? { client } : {}),
     });
-    return withSession({
+    return withCapture({
       isError: true,
       content: [{ type: "text", text: message || `${target.name} failed.` }],
     }, sessionId);
@@ -83,16 +83,23 @@ async function recordSafe(deps: CoreDeps, input: {
   }
 }
 
-function withSession(reply: ToolReply, sessionId: string | undefined): ToolReply {
-  if (!sessionId) return reply;
+function withCapture(reply: ToolReply, sessionId: string | undefined): ToolReply {
+  if (!sessionId) {
+    const text = "Life Diff could not record this call. The upstream result is shown above. If it may have changed anything, check the upstream before taking further action.";
+    return {
+      ...reply,
+      content: [...reply.content, { type: "text", text, _meta: { captureStatus: "failed" } }],
+      _meta: { ...(reply._meta ?? {}), captureStatus: "failed" },
+    };
+  }
   return {
     ...reply,
     content: [...reply.content, { type: "text", text: `Life Diff session ${sessionId}.`, _meta: { sessionId } }],
-    _meta: { ...(reply._meta ?? {}), sessionId },
+    _meta: { ...(reply._meta ?? {}), sessionId, captureStatus: "recorded" },
   };
 }
 
-function replyFrom(result: Record<string, unknown>, upstream: string, tool: string): ToolReply {
+function replyFrom(result: Record<string, unknown>, upstream: string, tool: string, failed: boolean): ToolReply {
   const content = Array.isArray(result.content)
     ? result.content.flatMap((item) => {
       const record = item && typeof item === "object" ? item as Record<string, unknown> : undefined;
@@ -100,10 +107,11 @@ function replyFrom(result: Record<string, unknown>, upstream: string, tool: stri
       return [{ type: "text" as const, text: record.text }];
     })
     : [];
-  const reply: ToolReply = {
-    content: content.length > 0 ? content : [{ type: "text", text: `${upstream} completed ${tool}.` }],
-  };
-  if (result.isError === true) reply.isError = true;
+  const omitted = Array.isArray(result.content) && result.content.some((item) => item && typeof item === "object" && item.type !== "text");
+  if (omitted) content.push({ type: "text", text: "Life Diff beta relays text and structured results. This upstream also returned non-text content that was omitted." });
+  if (content.length === 0) content.push({ type: "text", text: failed ? `${upstream} reported an error for ${tool}.` : `${upstream} returned no text for ${tool}.` });
+  const reply: ToolReply = { content };
+  if (typeof result.isError === "boolean") reply.isError = result.isError;
   if (result.structuredContent && typeof result.structuredContent === "object" && !Array.isArray(result.structuredContent)) {
     reply.structuredContent = result.structuredContent as Record<string, unknown>;
   }

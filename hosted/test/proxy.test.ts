@@ -8,6 +8,7 @@ import { namespaceTool, splitNamespaced } from "../src/proxy/namespace";
 import { pickSubject, redactText, redactValue } from "../src/proxy/redact";
 import { addUpstream, listPublicUpstreams } from "../src/proxy/upstreams";
 import { renderHtml } from "../src/receipt/html";
+import { buildRoundup, receiptPresentation, summaryFor } from "../src/receipt/roundup";
 import { SessionBook } from "../src/session/book";
 import { MemoryMetadataStore, MemoryObjectStore } from "../src/storage/memory";
 import type { GitHubApi } from "../src/github/types";
@@ -142,7 +143,7 @@ describe("redaction", () => {
     await recordProxyCall(deps, {
       upstream: "deepwiki",
       tool: "ask_wiki_question",
-      args: { question },
+      args: { question, body: "Quarterly fixture message body" },
       ok: true,
       status: "ok",
       summary: `Asked about ${question}`,
@@ -154,6 +155,7 @@ describe("redaction", () => {
     const ended = await endSession(deps, {});
     const stored = JSON.stringify({ receipt: ended.receipt, html: ended.html });
     for (const shape of ["hunter2", ...shapes]) expect(stored).not.toContain(shape);
+    expect(ended.receipt.actions?.[0]?.arguments).toMatchObject({ body: "Quarterly fixture message body" });
     const saved = [...objects.objects.values()].map((item) => item.body).join("\n");
     for (const shape of ["hunter2", ...shapes]) expect(saved).not.toContain(shape);
   });
@@ -237,7 +239,7 @@ describe("upstream forwarding", () => {
     const ok = await forwardToolCall(deps, fetchImpl, target, "create_page", { title: "Q2 goals", token: "sekret-value" });
     expect(ok.isError).toBeUndefined();
     expect(ok.content[0]?.text).toContain("created");
-    expect(ok._meta?.sessionId).toBe(book.getOpen()?.id);
+    expect(ok._meta).toEqual({ sessionId: book.getOpen()?.id, captureStatus: "recorded" });
     expect(ok.content.at(-1)?.text).toBe(`Life Diff session ${book.getOpen()?.id}.`);
     expect(ok.content.at(-1)?._meta).toEqual({ sessionId: book.getOpen()?.id });
     expect(book.getOpen()?.snapshotKey).toBe("");
@@ -273,6 +275,101 @@ describe("upstream forwarding", () => {
     expect(ended.html.indexOf("Created page &#39;Q2 goals&#39;")).toBeLessThan(ended.html.indexOf("<footer>"));
     expect(ended.html).not.toContain("sekret");
     expect(ended.summary).toContain("Created page 'Q2 goals' in Notes.");
+  });
+
+  it("returns a successful upstream result and an explicit capture failure without repeating a write", async () => {
+    const deps = baseDeps(new SessionBook(), new MemoryMetadataStore());
+    deps.sessions.log = async () => { throw new Error("fixture storage failure"); };
+    let upstreamCalls = 0;
+    const reply = await forwardToolCall(deps, upstreamFixture(() => {
+      upstreamCalls += 1;
+      return { isError: false, content: [{ type: "text", text: "Ticket moved to Passed." }], structuredContent: { state: "Passed" } };
+    }), scratch, "update_issue", { id: "QA-42" });
+    expect(upstreamCalls).toBe(1);
+    expect(reply.isError).toBe(false);
+    expect(reply.structuredContent).toEqual({ state: "Passed" });
+    expect(reply.content[0]?.text).toBe("Ticket moved to Passed.");
+    expect(reply.content[1]?.text).toMatch(/could not record.*check the upstream/i);
+    expect(reply._meta).toEqual({ captureStatus: "failed" });
+    expect(JSON.stringify(reply)).not.toContain("fixture storage failure");
+  });
+
+  it("relays tool-level failure and structured content and discloses omitted typed blocks", async () => {
+    const book = new SessionBook();
+    const deps = { ...baseDeps(book, new MemoryMetadataStore()), github: idleGithub() };
+    const blocks = [
+      { type: "text", text: "Invalid field." },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      { type: "audio", data: "YXVkaW8=", mimeType: "audio/wav" },
+      { type: "resource", resource: { uri: "file:///fixture", text: "Resource body" } },
+      { type: "resource_link", uri: "https://example.test/resource", name: "Fixture resource" },
+    ];
+    const reply = await forwardToolCall(deps, upstreamFixture(() => ({
+      isError: true, content: blocks, structuredContent: { reason: "Invalid field", code: 422 },
+    })), scratch, "update_issue", { id: "QA-43" });
+    expect(reply).toMatchObject({ isError: true, structuredContent: { reason: "Invalid field", code: 422 } });
+    expect(reply.content.map((block) => block.type)).toEqual(["text", "text", "text"]);
+    expect(reply.content[0]?.text).toBe("Invalid field.");
+    expect(reply.content[1]?.text).toContain("non-text content that was omitted");
+    const ended = await endSession(deps, {});
+    expect(summaryFor(ended.receipt)).toMatchObject({ changed: 0, failed: 1 });
+    expect(JSON.stringify(ended.receipt)).not.toContain("Resource body");
+    expect(ended.html).toContain("Invalid field");
+  });
+
+  it("shares simultaneous first calls and keeps client names when lookups collapse", async () => {
+    const book = new SessionBook();
+    const meta = new MemoryMetadataStore();
+    const deps = { ...baseDeps(book, meta), github: idleGithub() };
+    const fetchImpl = upstreamFixture(() => ({ content: [{ type: "text", text: "Wiki outline" }] }));
+    const calls = await Promise.all([
+      forwardToolCall(deps, fetchImpl, scratch, "read_wiki_structure", { repoName: "facebook/react" }, "Client A"),
+      forwardToolCall(deps, fetchImpl, scratch, "read_wiki_structure", { repoName: "facebook/react" }, "Client B"),
+    ]);
+    expect(meta.sessions.size).toBe(1);
+    expect(calls[0]._meta?.sessionId).toBe(calls[1]._meta?.sessionId);
+    const sessionId = String(calls[0]._meta?.sessionId);
+    const closed = await endSession(deps, { sessionId, agentName: "Third client" });
+    expect(closed.receipt.actions?.map((action) => action.client)).toEqual(expect.arrayContaining(["Client A", "Client B"]));
+    expect(closed.html).toContain("Client A, Client B");
+    expect(closed.html).not.toContain("Third client");
+    expect(closed.receipt.agentName).toBeUndefined();
+    expect(closed.html).toContain("2 lookups");
+    const presentation = await receiptPresentation(deps, closed.receipt, "https://lifediff.dev/receipts/fixture");
+    expect(presentation.markdown).toBe("Nothing changed · 2 lookups");
+    expect(presentation.png.byteLength).toBeGreaterThan(0);
+    expect((await endSession(deps, { sessionId })).receipt.id).toBe(closed.receipt.id);
+    expect(meta.receipts.size).toBe(1);
+  });
+
+  it("records a call finishing after close in the next session and includes each receipt in the day", async () => {
+    const deps = { ...baseDeps(new SessionBook(), new MemoryMetadataStore()), github: idleGithub() };
+    const fast = upstreamFixture(() => ({ content: [{ type: "text", text: "Updated scratch item" }] }));
+    const first = await forwardToolCall(deps, fast, scratch, "update_issue", { id: "QA-42" }, "Client A");
+    let inFlight!: () => void;
+    let complete!: () => void;
+    const called = new Promise<void>((resolve) => { inFlight = resolve; });
+    const release = new Promise<void>((resolve) => { complete = resolve; });
+    const slow = upstreamFixture(async () => {
+      inFlight();
+      await release;
+      return { content: [{ type: "text", text: "Scratch lookup" }] };
+    });
+    const pending = forwardToolCall(deps, slow, scratch, "get_issue", { id: "QA-42" }, "Client B");
+    await called;
+    const sessionId = String(first._meta?.sessionId);
+    const closed = await endSession(deps, { sessionId });
+    expect(closed.receipt.actions).toHaveLength(1);
+    complete();
+    const lookup = await pending;
+    expect(lookup._meta?.captureStatus).toBe("recorded");
+    expect(lookup._meta?.sessionId).not.toBe(sessionId);
+    expect((await endSession(deps, { sessionId })).receipt.id).toBe(closed.receipt.id);
+    await endSession(deps, { sessionId: String(lookup._meta?.sessionId) });
+    const day = await buildRoundup({ ...deps, issuer: "https://lifediff.dev" }, { save: false, detail: true });
+    expect(day.lines).toHaveLength(2);
+    expect(day.lines.map((line) => line.source)).toEqual(["proxy", "proxy"]);
+    expect(day.lines.map((line) => line.tone)).toEqual(["changed", "read"]);
   });
 });
 
@@ -353,6 +450,17 @@ describe("auto session and upstream secrets", () => {
     expect(html).not.toContain("read_wiki_structure");
   });
 });
+
+const scratch = { name: "scratch", url: "https://scratch.example.test/mcp" };
+
+function upstreamFixture(call: () => object | Promise<object>): typeof fetch {
+  return async (_input, init) => {
+    const { id, method } = JSON.parse(String(init?.body)) as { id: number; method: string };
+    if (method === "notifications/initialized") return new Response(null, { status: 202 });
+    const result = method === "initialize" ? { protocolVersion: "2025-03-26" } : await call();
+    return Response.json({ jsonrpc: "2.0", id, result });
+  };
+}
 
 function sse(data: string): string {
   return `event: message\ndata: ${data}\n\n`;

@@ -47,7 +47,7 @@ The sample uses synthetic data throughout.
 
 Clients on the same GitHub account share one open session. Rows show recorded client names where available. Close with `end_session` for an immediate receipt. The default 20-minute idle preference makes a session eligible to close on the next session-opening activity or hourly sweep. [Session boundaries, tool results, refresh, and undo.](docs/connect.md#beta-behavior)
 
-Hosted forwarding relays text and object-valued structured results. Receipts store bounded arguments and excerpts that can contain ordinary document or message text. Redaction covers recognized secret patterns and can miss sensitive content. Signed receipt and roundup links are access credentials. [Hosted data and privacy.](PRIVACY.md)
+Hosted forwarding uses operator-approved endpoints and relays text and object-valued structured results. The public demo approves DeepWiki at `https://mcp.deepwiki.com/mcp`. Receipts store bounded arguments and excerpts that can contain ordinary document or message text. Redaction covers recognized secret patterns and can miss sensitive content. Signed receipt and roundup links are access credentials. Use [Settings](https://lifediff.dev/settings) to clear history or [Account](https://lifediff.dev/account) to delete your Life Diff account. Both controls require browser sign-in and confirmation. [Hosted data and privacy.](PRIVACY.md)
 
 <details>
 <summary>Tool reference and self-hosting</summary>

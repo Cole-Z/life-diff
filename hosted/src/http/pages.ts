@@ -1,3 +1,4 @@
+import type { UpstreamPublic } from "../proxy/upstreams";
 import { receiptStyles } from "../receipt/page";
 import { renderSampleCard } from "../receipt/sample";
 import { copyTextScript } from "./copy";
@@ -71,21 +72,23 @@ function endpointInput(endpoint: string): string {
 export function renderPrivacy(): string {
   return layout("Privacy · Life Diff", `<h1>Hosted privacy</h1>
     <p>GitHub signs you in. Life Diff stores your GitHub ID and login, encrypted GitHub credentials, app installation IDs, preferences, and MCP grants. GitHub checks use metadata from repositories you explicitly name and have made available to the app.</p>
-    <p>Life Diff stores registered upstream URLs and encrypted credentials. Receipts and action logs can contain bounded tool arguments, result or error excerpts, and agent-reported text. Those fields can include ordinary file, message, or document content. Redaction masks secret-like fields and recognized patterns and can miss sensitive content. Calls go to their upstream with the original arguments.</p>
+    <p>Life Diff stores upstream URLs and encrypted credentials. Only approved endpoints receive calls, and redirects end the call. Enter credentials in the token field. Receipts and action logs can contain bounded tool arguments, result or error excerpts, and agent-reported text. Those fields can include ordinary file, message, or document content. Redaction masks secret-like fields and recognized patterns and can miss sensitive content. Calls go to their upstream with the original arguments.</p>
     <p>Defaults are 90 days for receipts, 24 hours for snapshots after close, and seven days for abandoned sessions. Hourly maintenance applies those limits. Daily pages have no separate age limit.</p>
-    <p>GitHub sign-in sets a seven-day browser session. Approved clients can use their Life Diff tokens. Anyone holding a signed HTML link can view its specific receipt or day for 24 hours, subject to the data still being available. Card image URLs also contain access credentials. Keep these URLs private.</p>
-    <p><a href="/settings">Clear history</a> removes saved sessions, receipts, and daily pages and keeps your sign-in, settings, and upstreams. <a href="/account">Delete my Life Diff data</a> also removes the Life Diff account, credentials, and grants. GitHub authorizations are managed separately on GitHub.</p>
+    <p>GitHub sign-in sets a seven-day browser session. Approved clients can use their Life Diff tokens. Anyone holding a signed HTML link can view its specific receipt or day for 24 hours, subject to the data still being available. Daily card links also expire after 24 hours. Receipt card links carry their own access credentials. Keep these URLs private.</p>
+    <p><a href="/settings">Clear history</a> removes saved sessions, receipts, and daily pages and invalidates their links. It keeps your sign-in, settings, and upstreams. <a href="/account">Delete my Life Diff data</a> also removes the Life Diff account and credentials and revokes browser sessions and MCP grants. GitHub authorizations are managed separately on GitHub.</p>
     <p><a href="https://github.com/Cole-Z/life-diff/blob/main/PRIVACY.md">Full hosted data and privacy details</a></p>`);
 }
 
-export function renderAccount(login: string, csrf: string): string {
+export function renderAccount(login: string, csrf: string, error?: string): string {
   return layout("Account", `<h1>Account</h1>
     <p>Signed in as <strong>${escapeHtml(login)}</strong>.</p>
     <p><a href="/settings">Manage upstream MCP servers</a></p>
+    ${error ? `<p role="alert">${escapeHtml(error)}</p>` : ""}
     <p>Deleting your data removes GitHub tokens, sessions, snapshots, receipts, and Life Diff access grants. It does not change anything on GitHub. Uninstall the GitHub App in GitHub settings as well.</p>
     <form method="post" action="/account/delete">
       <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
-      <button name="confirm" value="delete">Delete my Life Diff data</button>
+      <label><input type="checkbox" name="confirm" value="delete" required> Permanently delete my Life Diff account and history</label>
+      <button>Delete my Life Diff data</button>
     </form>`);
 }
 
@@ -102,12 +105,6 @@ export function renderMcpBrowserPage(endpoint: string): string {
     ${setupLinks()}`);
 }
 
-export interface SettingsUpstream {
-  name: string;
-  url: string;
-  hasToken: boolean;
-}
-
 export interface SettingsView {
   timeZone: string;
   dayEnd: string;
@@ -116,13 +113,14 @@ export interface SettingsView {
   quietDays: boolean;
 }
 
-export function renderSettings(login: string, csrf: string, upstreams: SettingsUpstream[], settings: SettingsView, error?: string): string {
+export function renderSettings(login: string, csrf: string, upstreams: UpstreamPublic[], settings: SettingsView, error?: string): string {
   const rows = upstreams.length === 0
     ? `<p>No upstreams yet. Add the MCP server your agent should call through Life Diff.</p>`
     : upstreams.map((item) => `<li>
         <strong>${escapeHtml(item.name)}</strong>
-        <div><code>${escapeHtml(item.url)}</code></div>
-        <div>${item.hasToken ? "Token saved" : "No token"} · Registered for discovery</div>
+        ${item.status === "approved"
+          ? `<div><code>${escapeHtml(item.url)}</code></div><div>${item.hasToken ? "Token saved" : "No token"} · Registered for discovery</div>`
+          : `<div>Blocked by the endpoint policy. Remove this entry or ask the operator to approve its final HTTPS endpoint.</div>`}
         <form method="post" action="/settings/remove">
           <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
           <input type="hidden" name="name" value="${escapeHtml(item.name)}">
@@ -145,7 +143,7 @@ export function renderSettings(login: string, csrf: string, upstreams: SettingsU
       <button>Save</button>
     </form>
     <h2>Tools your agents use</h2>
-    <p>Registration saves the connection for discovery. Refresh or reconnect your client and look for <code>name__tool</code> to confirm the upstream published tools.</p>
+    <p>Only operator-approved endpoints can be registered. Enter the final URL and put credentials in the token field. Registration saves the connection for discovery. Refresh or reconnect your client and look for <code>name__tool</code> to confirm the upstream published tools.</p>
     ${upstreams.length ? `<ul>${rows}</ul>` : rows}
     <form method="post" action="/settings">
       <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
@@ -156,7 +154,7 @@ export function renderSettings(login: string, csrf: string, upstreams: SettingsU
     </form>
     <p>If tools are missing, check the upstream URL and credentials, then refresh or reconnect. An upstream may be unreachable or publish zero tools. <a href="${clientGuide}#troubleshooting">Troubleshoot discovery</a></p>
     <h2>History</h2>
-    <p>This deletes sessions, receipts, and daily diffs for this account. Upstream servers and the GitHub sign-in stay.</p>
+    <p>This deletes sessions, receipts, and daily diffs for this account and invalidates their links. Upstream servers and the GitHub sign-in stay.</p>
     <form method="post" action="/settings/clear">
       <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
       <label><input type="checkbox" name="confirm" value="yes" required> Delete my Life Diff history</label>

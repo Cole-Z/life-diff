@@ -197,6 +197,7 @@ describe("D1 statements", () => {
   it("binds the user id instead of interpolating it", async () => {
     const calls: { sql: string; binds: unknown[] }[] = [];
     const db: Sql = {
+      batch: (statements) => Promise.all(statements.map((statement) => statement.run())),
       prepare(sql: string) {
         const binds: unknown[] = [];
         const statement = {
@@ -230,6 +231,7 @@ describe("D1 statements", () => {
   it("closes a session only while it is still open", async () => {
     const calls: { sql: string }[] = [];
     const db: Sql = {
+      batch: (statements) => Promise.all(statements.map((statement) => statement.run())),
       prepare(sql: string) {
         const statement = {
           bind() { return statement; },

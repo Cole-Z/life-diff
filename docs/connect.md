@@ -162,7 +162,7 @@ Use a remote Streamable HTTP configuration on the active host and a client that 
 
 ## First lookup
 
-An **upstream** is a tool server whose calls you want routed through Life Diff. [DeepWiki](https://docs.devin.ai/work-with-devin/deepwiki-mcp) is public and needs no token. Start with a fresh Life Diff session. Check for any existing shared open session before closing or running the test.
+An **upstream** is a tool server whose calls you want routed through Life Diff. [DeepWiki](https://docs.devin.ai/work-with-devin/deepwiki-mcp) is the public demo’s approved upstream and needs no token. Use its exact final endpoint without a query or fragment. Start with a fresh Life Diff session. Check for any existing shared open session before closing or running the test.
 
 Paste the first block into your agent, then refresh or reconnect the client before pasting the second.
 
@@ -170,7 +170,8 @@ Paste the first block into your agent, then refresh or reconnect the client befo
 Use Life Diff's list_upstreams to confirm sign-in and show saved upstreams.
 If there is no upstream named deepwiki, use Life Diff's add_upstream with
 {"name":"deepwiki","url":"https://mcp.deepwiki.com/mcp"}. Use no token.
-If deepwiki already exists, confirm it points to that URL and reuse it.
+If deepwiki already exists and is approved at that URL, reuse it.
+If it is blocked, stop and tell me which registration I need to replace.
 Stop after reporting whether it is registered.
 ```
 
@@ -189,9 +190,13 @@ Expect a DeepWiki result, one lookup, zero writes, and no image in the immediate
 ## Troubleshooting
 
 - **Sign-in canceled, expired, or insufficient scope.** Start a new client sign-in and complete GitHub and Life Diff consent with both scopes. Reopen the client session. For Settings and Today, use the browser profile that completed sign-in.
-- **Registration succeeds but tools are missing.** `list_upstreams` confirms registration. Discovery happens when Life Diff builds the tool catalog. Reconnect or rescan from the active client, then look for the namespaced name. If credentials or the endpoint changed, remove the old registration and add it again. If the upstream is slow or temporarily unavailable, allow at least 10 seconds for a failed discovery cache entry to expire and reconnect again. A successful catalog can be cached on the server for up to a minute. The client can cache it separately. Check that the upstream actually exposes tools at the configured HTTPS URL.
+- **Registration succeeds but tools are missing.** `list_upstreams` confirms registration. Discovery happens when Life Diff builds the tool catalog. Reconnect or rescan from the active client, then look for the namespaced name. If the registration is blocked, remove it and use an approved final endpoint. For DeepWiki, use `https://mcp.deepwiki.com/mcp`. Put credentials for other approved upstreams in the token field. If discovery reports a redirect, ask the operator to approve the final HTTPS endpoint and register that URL. If the upstream is slow or temporarily unavailable, allow at least 10 seconds for a failed discovery cache entry to expire and reconnect again. A successful catalog can be cached on the server for up to a minute. The client can cache it separately. Check that the upstream actually exposes tools at the configured HTTPS URL.
 - **An upstream or capture error occurs.** The upstream result and Life Diff's capture result describe different steps. If Life Diff says the call could not be recorded, check the upstream state before taking any further action that could repeat a write.
 - **The client skips the image.** Use the receipt Markdown or open the signed HTML link privately. A lookup-only close normally returns a single text line. Fetch it with `get_receipt` for the card.
+
+## History and account controls
+
+Use **Clear my history** in [Settings](https://lifediff.dev/settings) or **Delete my Life Diff data** in [Account](https://lifediff.dev/account). Open the browser that completed sign-in and confirm the action there. Clearing history invalidates signed views, including daily links for dates that receive new activity. Deleting the account also revokes client grants and browser sessions. [Hosted privacy](../PRIVACY.md)
 
 ## Beta behavior
 

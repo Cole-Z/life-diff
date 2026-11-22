@@ -7,6 +7,7 @@ export interface ViewGrant {
   kind: "receipt" | "day";
   id: string;
   userId: string;
+  historyVersion: string;
   exp: number;
 }
 
@@ -16,6 +17,7 @@ export async function signViewGrant(key: string, grant: Omit<ViewGrant, "exp">, 
     kind: grant.kind,
     id: grant.id,
     userId: grant.userId,
+    historyVersion: grant.historyVersion,
     exp: nowSeconds + VIEW_TTL_SECONDS,
   } satisfies ViewGrant)));
   const sig = await hmac(key, body);
@@ -40,6 +42,7 @@ export async function readViewGrant(key: string, token: string, nowSeconds: numb
   }
   if (!parsed || (parsed.kind !== "receipt" && parsed.kind !== "day")) return null;
   if (typeof parsed.id !== "string" || !parsed.id || typeof parsed.userId !== "string" || !parsed.userId) return null;
+  if (typeof parsed.historyVersion !== "string") return null;
   if (typeof parsed.exp !== "number" || parsed.exp <= nowSeconds) return null;
   return parsed;
 }

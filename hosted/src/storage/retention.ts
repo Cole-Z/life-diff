@@ -43,8 +43,16 @@ export async function deleteUserData(input: {
   sessions: SessionSweeper;
   userId: string;
 }): Promise<{ objects: number }> {
-  const roundupKey = roundupJsonKey(input.userId);
-  const roundupRaw = await input.objects.get(roundupKey);
+  const keys = await historyObjectKeys(input.meta, input.objects, input.userId);
+  await input.objects.delete(keys);
+  await input.sessions.wipe(input.userId);
+  await input.meta.deleteUserRows(input.userId);
+  return { objects: keys.length };
+}
+
+export async function historyObjectKeys(meta: MetadataStore, objects: ObjectStore, userId: string): Promise<string[]> {
+  const roundupKey = roundupJsonKey(userId);
+  const roundupRaw = await objects.get(roundupKey);
   const extra = [roundupKey];
   if (roundupRaw) {
     try {
@@ -54,11 +62,8 @@ export async function deleteUserData(input: {
       // The roundup file is removed either way.
     }
   }
-  const keys = [...await input.meta.userObjectKeys(input.userId), ...extra];
-  await input.objects.delete(keys);
-  await input.sessions.wipe(input.userId);
-  await input.meta.deleteUserRows(input.userId);
-  return { objects: keys.length };
+  const keys = [...await meta.userObjectKeys(userId), ...extra];
+  return keys;
 }
 
 export type { AbandonedSession };

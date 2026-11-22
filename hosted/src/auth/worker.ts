@@ -32,6 +32,15 @@ export function oauthServer(env: Env): OAuthAuthorizationServer<Env> {
   });
 }
 
+export async function validateLifeDiffToken(env: Env, resource: string, token: string) {
+  const validated = env.AUTH_SERVER
+    ? await env.AUTH_SERVER.validateToken(resource, token)
+    : await oauthServer(env).validateToken(resource, token, env);
+  if (!validated?.props.userId || !validated.props.login) return null;
+  const versions = await new D1MetadataStore(env.DB).getAccessVersions(validated.props.userId);
+  return versions?.accountVersion === (validated.props.accountVersion ?? "") ? validated : null;
+}
+
 export class AuthServer extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
     return handleApp(request, this.env, this.ctx);
@@ -126,14 +135,14 @@ async function callback(request: Request, env: Env): Promise<Response> {
   const props = authProps(profile);
   const now = new Date();
   const meta = new D1MetadataStore(env.DB);
-  await meta.upsertUser({ id: props.userId, login: props.login, now: now.toISOString() });
+  const { accountVersion } = await meta.upsertUser({ id: props.userId, login: props.login, now: now.toISOString() });
   await meta.saveCredentials(await sealCredentials(env.TOKEN_ENCRYPTION_KEY, props.userId, tokens, now));
   const completed = await oauth.completeAuthorization({
     request: resumed.request,
     userId: props.userId,
     metadata: {},
     scope: resumed.request.scope,
-    props,
+    props: { ...props, accountVersion },
   });
   resumed.headers.set("location", completed.redirectTo);
   const csrf = crypto.randomUUID();
@@ -141,6 +150,7 @@ async function callback(request: Request, env: Env): Promise<Response> {
     sub: props.userId,
     login: props.login,
     csrf,
+    accountVersion,
     exp: Math.floor(now.getTime() / 1000) + SESSION_SECONDS,
   });
   resumed.headers.append("set-cookie", sessionCookieHeader(cookie, SESSION_SECONDS));
@@ -148,24 +158,28 @@ async function callback(request: Request, env: Env): Promise<Response> {
 }
 
 async function account(request: Request, env: Env): Promise<Response> {
-  const session = await currentSession(request, env);
+  const session = await browserSession(request, env);
   if (!session) return html(renderSignedOut("Account"));
   return html(renderAccount(session.login, session.csrf));
 }
 
 async function deleteAccount(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
-  const session = await currentSession(request, env);
+  const session = await browserSession(request, env);
   if (!session) return html(renderSignedOut("Account"), 401);
   const form = await request.formData();
-  if (form.get("confirm") !== "delete" || form.get("csrf") !== session.csrf) {
-    return new Response("The deletion form did not match this session.", { status: 400 });
+  if (form.get("csrf") !== session.csrf) {
+    return html(renderAccount(session.login, session.csrf, "The form did not match this session."), 400);
+  }
+  if (form.get("confirm") !== "delete") {
+    return html(renderAccount(session.login, session.csrf, "Check the box to confirm account deletion."), 400);
   }
   await eraseUser(env, session.sub);
   return html(renderDeleted(), 200, clearSessionCookieHeader());
 }
 
-export async function eraseUser(env: Env, userId: string): Promise<void> {
+async function eraseUser(env: Env, userId: string): Promise<void> {
+  await revokeAllGrants(oauthServer(env).getOAuthApi(env), userId);
   const meta = new D1MetadataStore(env.DB);
   await deleteUserData({
     meta,
@@ -173,11 +187,6 @@ export async function eraseUser(env: Env, userId: string): Promise<void> {
     sessions: sessionSweeper(env),
     userId,
   });
-  await revokeAllGrants(oauthServer(env).getOAuthApi(env), userId);
-}
-
-async function currentSession(request: Request, env: Env) {
-  return browserSession(request, env);
 }
 
 function html(body: string, status = 200, setCookie?: string): Response {

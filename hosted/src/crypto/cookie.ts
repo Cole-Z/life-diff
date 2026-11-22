@@ -4,6 +4,7 @@ export interface SessionCookie {
   sub: string;
   login: string;
   csrf: string;
+  accountVersion?: string;
   exp: number;
 }
 
@@ -35,6 +36,7 @@ export async function readSession(key: string, token: string, nowSeconds: number
   if (!parsed || typeof parsed.sub !== "string" || typeof parsed.login !== "string" || typeof parsed.csrf !== "string") {
     return null;
   }
+  if (parsed.accountVersion !== undefined && typeof parsed.accountVersion !== "string") return null;
   if (typeof parsed.exp !== "number" || parsed.exp <= nowSeconds) return null;
   return parsed;
 }

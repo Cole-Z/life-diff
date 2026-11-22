@@ -2,6 +2,7 @@ import { validTimeZone } from "../text";
 import { DEFAULT_SETTINGS, parseDayEnd, type UserSettings } from "../time";
 import type {
   AbandonedSession,
+  AccessVersions,
   CredentialRow,
   DailyDiffRow,
   ExpiredReceipt,
@@ -25,16 +26,27 @@ interface SqlStatement {
 
 export interface Sql {
   prepare(query: string): SqlStatement;
+  batch(statements: SqlStatement[]): Promise<unknown>;
 }
 
 export class D1MetadataStore implements MetadataStore {
   constructor(private readonly db: Sql) {}
 
-  async upsertUser(user: { id: string; login: string; now: string }): Promise<void> {
-    await this.db.prepare(
-      `INSERT INTO users (id, login, created_at, updated_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET login = excluded.login, updated_at = excluded.updated_at`,
-    ).bind(user.id, user.login, user.now, user.now).run();
+  async upsertUser(user: { id: string; login: string; now: string }): Promise<AccessVersions> {
+    const versions = await this.db.prepare(
+      `INSERT INTO users (id, login, created_at, updated_at, account_version, history_version)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET login = excluded.login, updated_at = excluded.updated_at
+       RETURNING account_version AS accountVersion, history_version AS historyVersion`,
+    ).bind(user.id, user.login, user.now, user.now, crypto.randomUUID(), crypto.randomUUID()).first<AccessVersions>();
+    if (!versions) throw new Error("Life Diff could not save the account.");
+    return versions;
+  }
+
+  async getAccessVersions(userId: string): Promise<AccessVersions | null> {
+    return this.db.prepare(
+      `SELECT account_version AS accountVersion, history_version AS historyVersion FROM users WHERE id = ?`,
+    ).bind(userId).first<AccessVersions>();
   }
 
   async saveCredentials(row: CredentialRow): Promise<void> {
@@ -167,14 +179,14 @@ export class D1MetadataStore implements MetadataStore {
   }
 
   async deleteUserRows(userId: string): Promise<void> {
-    await this.db.prepare(`DELETE FROM receipts WHERE user_id = ?`).bind(userId).run();
-    await this.db.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
-    await this.db.prepare(`DELETE FROM installations WHERE user_id = ?`).bind(userId).run();
-    await this.db.prepare(`DELETE FROM github_credentials WHERE user_id = ?`).bind(userId).run();
-    await this.db.prepare(`DELETE FROM upstreams WHERE user_id = ?`).bind(userId).run();
-    await this.db.prepare(`DELETE FROM user_settings WHERE user_id = ?`).bind(userId).run();
-    await this.db.prepare(`DELETE FROM daily_diffs WHERE user_id = ?`).bind(userId).run();
-    await this.db.prepare(`DELETE FROM users WHERE id = ?`).bind(userId).run();
+    await this.db.batch([
+      ...this.historyDeletes(userId),
+      this.db.prepare(`DELETE FROM installations WHERE user_id = ?`).bind(userId),
+      this.db.prepare(`DELETE FROM github_credentials WHERE user_id = ?`).bind(userId),
+      this.db.prepare(`DELETE FROM upstreams WHERE user_id = ?`).bind(userId),
+      this.db.prepare(`DELETE FROM user_settings WHERE user_id = ?`).bind(userId),
+      this.db.prepare(`DELETE FROM users WHERE id = ?`).bind(userId),
+    ]);
   }
 
   async expiredReceipts(nowIso: string, limit: number): Promise<ExpiredReceipt[]> {
@@ -323,9 +335,18 @@ export class D1MetadataStore implements MetadataStore {
   }
 
   async clearHistory(userId: string): Promise<void> {
-    await this.db.prepare(`DELETE FROM receipts WHERE user_id = ?`).bind(userId).run();
-    await this.db.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
-    await this.db.prepare(`DELETE FROM daily_diffs WHERE user_id = ?`).bind(userId).run();
+    await this.db.batch([
+      this.db.prepare(`UPDATE users SET history_version = ? WHERE id = ?`).bind(crypto.randomUUID(), userId),
+      ...this.historyDeletes(userId),
+    ]);
+  }
+
+  private historyDeletes(userId: string): SqlStatement[] {
+    return [
+      this.db.prepare(`DELETE FROM receipts WHERE user_id = ?`).bind(userId),
+      this.db.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId),
+      this.db.prepare(`DELETE FROM daily_diffs WHERE user_id = ?`).bind(userId),
+    ];
   }
 }
 

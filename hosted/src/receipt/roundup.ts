@@ -17,7 +17,6 @@ export interface Roundup {
   lines: StoryLine[];
   png: Uint8Array;
   html: string;
-  imageUrl?: string;
   cardToken?: string;
   finalized: boolean;
   quiet: boolean;
@@ -67,7 +66,6 @@ export async function buildRoundup(deps: CoreDeps & { issuer: string }, input: {
   const token = input.save && !skipStore ? (previous?.cardToken ?? randomHex()) : previous?.cardToken;
   const origin = deps.issuer.replace(/\/$/, "");
   const page = `${origin}/roundup/${day}`;
-  const imageUrl = token ? `${origin}/roundup/card.png?t=${token}` : undefined;
   const label = day === today ? "Today" : day;
   const headline = headlineFor(lines, label);
   const heading = agentTitle(lines, settings.timeZone);
@@ -132,7 +130,6 @@ export async function buildRoundup(deps: CoreDeps & { issuer: string }, input: {
     png,
     html,
     finalized: Boolean(finalizedAt),
-    ...(imageUrl ? { imageUrl } : {}),
     ...(token ? { cardToken: token } : {}),
     quiet: chat.quiet,
   };
@@ -158,7 +155,6 @@ export async function loadRoundup(deps: CoreDeps & { issuer: string }, day?: str
     png: png ?? new Uint8Array(),
     html: redactText(stored.html),
     finalized: true,
-    imageUrl: `${deps.issuer.replace(/\/$/, "")}/roundup/card.png?t=${stored.cardToken}`,
     cardToken: stored.cardToken,
     quiet: isQuiet(stored.lines),
   };

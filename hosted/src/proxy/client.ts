@@ -1,4 +1,5 @@
 import { HOSTED_VERSION } from "../constants";
+import { approvedUpstreamUrl, validUpstreamAuthHeader } from "./namespace";
 
 const PROTOCOL = "2025-03-26";
 const MAX_BODY = 1_500_000;
@@ -28,18 +29,26 @@ export class UpstreamError extends Error {
   }
 }
 
+export const UPSTREAM_REDIRECT_MESSAGE = "The upstream redirected. Configure the final HTTPS endpoint.";
+
+export class UpstreamRedirectError extends UpstreamError {
+  constructor() {
+    super(UPSTREAM_REDIRECT_MESSAGE);
+  }
+}
+
 interface RpcMessage {
   id?: unknown;
   result?: unknown;
   error?: { message?: unknown };
 }
 
-export async function listUpstreamTools(fetchImpl: typeof fetch, target: UpstreamTarget, timeoutMs = 15_000): Promise<UpstreamToolInfo[]> {
-  const session = await openSession(fetchImpl, target, timeoutMs);
+export async function listUpstreamTools(fetchImpl: typeof fetch, target: UpstreamTarget, endpoints: ReadonlySet<string>, timeoutMs = 15_000): Promise<UpstreamToolInfo[]> {
+  const session = await openSession(fetchImpl, target, endpoints, timeoutMs);
   const tools: UpstreamToolInfo[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < 5; page += 1) {
-    const result = await rpc(fetchImpl, target, session, "tools/list", cursor ? { cursor } : {}, timeoutMs);
+    const result = await rpc(fetchImpl, target, endpoints, session, "tools/list", cursor ? { cursor } : {}, timeoutMs);
     const record = asRecord(result);
     const listed = Array.isArray(record?.tools) ? record.tools : [];
     for (const item of listed) {
@@ -66,10 +75,11 @@ export async function callUpstreamTool(
   target: UpstreamTarget,
   tool: string,
   args: unknown,
+  endpoints: ReadonlySet<string>,
   timeoutMs = 20_000,
 ): Promise<Record<string, unknown>> {
-  const session = await openSession(fetchImpl, target, timeoutMs);
-  const result = await rpc(fetchImpl, target, session, "tools/call", {
+  const session = await openSession(fetchImpl, target, endpoints, timeoutMs);
+  const result = await rpc(fetchImpl, target, endpoints, session, "tools/call", {
     name: tool,
     arguments: args && typeof args === "object" ? args : {},
   }, timeoutMs);
@@ -83,8 +93,8 @@ interface Session {
   protocol: string;
 }
 
-async function openSession(fetchImpl: typeof fetch, target: UpstreamTarget, timeoutMs: number): Promise<Session> {
-  const opened = await post(fetchImpl, target, {
+async function openSession(fetchImpl: typeof fetch, target: UpstreamTarget, endpoints: ReadonlySet<string>, timeoutMs: number): Promise<Session> {
+  const opened = await post(fetchImpl, target, endpoints, {
     jsonrpc: "2.0",
     id: 1,
     method: "initialize",
@@ -98,8 +108,9 @@ async function openSession(fetchImpl: typeof fetch, target: UpstreamTarget, time
   const protocol = typeof result?.protocolVersion === "string" ? result.protocolVersion : PROTOCOL;
   const session: Session = { protocol, ...(opened.sessionId ? { id: opened.sessionId } : {}) };
   try {
-    await post(fetchImpl, target, { jsonrpc: "2.0", method: "notifications/initialized" }, session, timeoutMs);
-  } catch {
+    await post(fetchImpl, target, endpoints, { jsonrpc: "2.0", method: "notifications/initialized" }, session, timeoutMs);
+  } catch (error) {
+    if (error instanceof UpstreamRedirectError) throw error;
     // A server can refuse the notification and still accept tools/list and tools/call.
   }
   return session;
@@ -108,36 +119,44 @@ async function openSession(fetchImpl: typeof fetch, target: UpstreamTarget, time
 async function rpc(
   fetchImpl: typeof fetch,
   target: UpstreamTarget,
+  endpoints: ReadonlySet<string>,
   session: Session,
   method: string,
   params: unknown,
   timeoutMs: number,
 ): Promise<unknown> {
-  const response = await post(fetchImpl, target, { jsonrpc: "2.0", id: 2, method, params }, session, timeoutMs);
+  const response = await post(fetchImpl, target, endpoints, { jsonrpc: "2.0", id: 2, method, params }, session, timeoutMs);
   return response.result;
 }
 
 async function post(
   fetchImpl: typeof fetch,
   target: UpstreamTarget,
+  endpoints: ReadonlySet<string>,
   message: Record<string, unknown>,
   session: Session | undefined,
   timeoutMs: number,
 ): Promise<{ result: unknown; sessionId?: string }> {
+  const url = approvedUpstreamUrl(target.url, endpoints);
+  if (!url) throw new UpstreamError("This upstream endpoint is not approved. Configure an approved final HTTPS endpoint.");
   const headers = new Headers({
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
   });
   if (session?.protocol) headers.set("mcp-protocol-version", session.protocol);
   if (session?.id) headers.set("mcp-session-id", session.id);
-  if (target.auth?.header && target.auth.value) headers.set(target.auth.header, target.auth.value);
+  if (target.auth) {
+    if (!validUpstreamAuthHeader(target.auth.header)) throw new UpstreamError("Configure an authentication header for this upstream.");
+    headers.set(target.auth.header, target.auth.value);
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     let response: Response;
     try {
-      response = await fetchImpl(target.url, {
+      response = await fetchImpl(url, {
         method: "POST",
+        redirect: "manual",
         headers,
         body: JSON.stringify(message),
         signal: controller.signal,
@@ -147,6 +166,10 @@ async function post(
         throw new UpstreamError(`${target.name} did not respond in time.`);
       }
       throw new UpstreamError(`${target.name} could not be reached.`);
+    }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new UpstreamRedirectError();
     }
     if (response.status === 202 || response.status === 204) {
       return { result: null, ...(response.headers.get("mcp-session-id") ? { sessionId: response.headers.get("mcp-session-id") ?? undefined } : {}) };

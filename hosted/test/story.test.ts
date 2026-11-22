@@ -157,7 +157,7 @@ describe("roundup", () => {
     expect(first.markdown).not.toContain("evt_1");
     expect(first.markdown).not.toContain("google_calendar__");
     expect(first.markdown.startsWith("TODAY\n")).toBe(true);
-    expect(first.imageUrl).toContain("/roundup/card.png?t=");
+    expect(first.cardToken).toMatch(/^[a-f0-9]{32}$/);
     expect(first.png[0]).toBe(137);
     const id = first.lines.find((line) => line.undo)?.id;
     expect(id).toMatch(/^[a-z0-9]{2}$/);

@@ -157,9 +157,9 @@ describe("session title", () => {
 describe("signed view links", () => {
   it("signs one receipt or one day and expires", async () => {
     const issuedAt = 1_700_000_000;
-    const receipt = await signViewGrant(KEY, { kind: "receipt", id: "rcpt_1", userId: "42" }, issuedAt);
-    const day = await signViewGrant(KEY, { kind: "day", id: "2026-04-02", userId: "42" }, issuedAt);
-    expect(await readViewGrant(KEY, receipt, issuedAt)).toMatchObject({ kind: "receipt", id: "rcpt_1", userId: "42" });
+    const receipt = await signViewGrant(KEY, { kind: "receipt", id: "rcpt_1", userId: "42", historyVersion: "" }, issuedAt);
+    const day = await signViewGrant(KEY, { kind: "day", id: "2026-04-02", userId: "42", historyVersion: "" }, issuedAt);
+    expect(await readViewGrant(KEY, receipt, issuedAt)).toMatchObject({ kind: "receipt", id: "rcpt_1", userId: "42", historyVersion: "" });
     expect(await readViewGrant(KEY, receipt, issuedAt + VIEW_TTL_SECONDS)).toBeNull();
     expect(await readViewGrant(KEY, `${receipt}x`, issuedAt)).toBeNull();
     expect(viewUrl("https://lifediff.dev", "receipt", "rcpt_1", receipt)).toBe(`https://lifediff.dev/receipts/rcpt_1?t=${encodeURIComponent(receipt)}`);
@@ -174,7 +174,7 @@ describe("signed view links", () => {
       expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     }
     const current = Math.floor(Date.now() / 1000);
-    const validDay = await signViewGrant(KEY, { kind: "day", id: "2026-04-02", userId: "42" }, current);
+    const validDay = await signViewGrant(KEY, { kind: "day", id: "2026-04-02", userId: "42", historyVersion: "" }, current);
     for (const path of ["/roundup", "/roundup/2026-04-03"]) {
       const mismatched = await handleRoundup(new Request(`https://lifediff.dev${path}?t=${validDay}`), { COOKIE_SIGNING_KEY: KEY } as Env);
       expect(mismatched.status).toBe(401);

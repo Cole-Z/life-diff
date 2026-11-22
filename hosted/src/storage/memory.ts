@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS, type UserSettings } from "../time";
 import type {
   AbandonedSession,
+  AccessVersions,
   CredentialRow,
   DailyDiffRow,
   ExpiredReceipt,
@@ -16,7 +17,7 @@ import type {
 } from "./types";
 
 export class MemoryMetadataStore implements MetadataStore {
-  users = new Map<string, { id: string; login: string; createdAt: string; updatedAt: string }>();
+  users = new Map<string, { id: string; login: string; createdAt: string; updatedAt: string } & AccessVersions>();
   credentials = new Map<string, CredentialRow>();
   installations = new Map<string, InstallationRow[]>();
   sessions = new Map<string, SessionRow>();
@@ -25,14 +26,24 @@ export class MemoryMetadataStore implements MetadataStore {
   settings = new Map<string, UserSettings>();
   daily = new Map<string, DailyDiffRow>();
 
-  async upsertUser(user: { id: string; login: string; now: string }): Promise<void> {
+  async upsertUser(user: { id: string; login: string; now: string }): Promise<AccessVersions> {
     const existing = this.users.get(user.id);
+    const accountVersion = existing?.accountVersion ?? crypto.randomUUID();
+    const historyVersion = existing?.historyVersion ?? crypto.randomUUID();
     this.users.set(user.id, {
       id: user.id,
       login: user.login,
       createdAt: existing?.createdAt ?? user.now,
       updatedAt: user.now,
+      accountVersion,
+      historyVersion,
     });
+    return { accountVersion, historyVersion };
+  }
+
+  async getAccessVersions(userId: string): Promise<AccessVersions | null> {
+    const user = this.users.get(userId);
+    return user ? { accountVersion: user.accountVersion, historyVersion: user.historyVersion } : null;
   }
 
   async saveCredentials(row: CredentialRow): Promise<void> {
@@ -169,6 +180,8 @@ export class MemoryMetadataStore implements MetadataStore {
   }
 
   async clearHistory(userId: string): Promise<void> {
+    const user = this.users.get(userId);
+    if (user) user.historyVersion = crypto.randomUUID();
     for (const [id, session] of this.sessions) if (session.userId === userId) this.sessions.delete(id);
     for (const [id, receipt] of this.receipts) if (receipt.userId === userId) this.receipts.delete(id);
     for (const [id, row] of this.daily) if (row.userId === userId) this.daily.delete(id);

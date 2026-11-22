@@ -30,6 +30,33 @@ describe("browser GET /mcp", () => {
     expect(await post.text()).toBe("");
   });
 
+  it("offers a deterministic public sample and setup links from protected pages", async () => {
+    const get = (path: string) => worker.fetch(new Request(`https://lifediff.dev${path}`), env, ctx);
+    const home = await get("/");
+    const landing = await home.text();
+    expect(landing).toContain("Get a receipt for what your AI agents changed");
+    expect(landing.match(/<article class="row /g)).toHaveLength(3);
+    expect(landing).toContain('href="/sample-receipt"');
+    expect(landing).toContain('href="#connect"');
+    const sample = await get("/sample-receipt");
+    expect(sample.status).toBe(200);
+    const html = await sample.text();
+    expect(await (await get("/sample-receipt")).text()).toBe(html);
+    expect(html.match(/<article class="row /g)).toHaveLength(4);
+    for (const label of ["Verified", "Agent said", "Failed", "QA-42", "1 lookup", "9:30 AM → 10:00 AM", "example-org/launch-sandbox"]) {
+      expect(html).toContain(label);
+    }
+    expect(html).not.toMatch(/\/receipts\/|\?t=/);
+    for (const [path, heading, status] of [["/settings", "Settings", 401], ["/roundup", "Today", 401], ["/account", "Account", 200]] as const) {
+      const response = await get(path);
+      expect(response.status).toBe(status);
+      const page = await response.text();
+      expect(page).toContain(`<h1>${heading}</h1>`);
+      expect(page).toContain('href="/#connect"');
+      expect(page).toContain('href="/sample-receipt"');
+    }
+  });
+
   it("leaves a request that already has a bearer token on the resource server", async () => {
     const authed = {
       ...env,
@@ -46,6 +73,7 @@ describe("browser GET /mcp", () => {
   it("escapes the endpoint in the browser page", () => {
     const html = renderMcpBrowserPage("https://lifediff.dev/mcp?<script>");
     expect(html).toContain("https://lifediff.dev/mcp?&lt;script&gt;");
-    expect(html).not.toContain("<script>");
+    expect(html.match(/<script>/g)).toHaveLength(1);
+    expect(html).not.toContain("mcp?<script>");
   });
 });

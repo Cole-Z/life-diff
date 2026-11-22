@@ -29,11 +29,11 @@ const claimSchema = z.object({
 });
 
 const INSTRUCTIONS = [
-  "Life Diff is a daily diff of what your AI agents changed across the tools you use. It is not a GitHub diff. GitHub is only how the user signs in.",
-  "Route the user's other tool calls through this server. After an upstream is added, its tools are named <upstream>__<tool>. A session starts on the first call if none is open. The proxied result includes that session id. Call end_session before your final reply. Omit sessionId and end_session closes the open session. An idle session closes itself after the quiet period (20 minutes unless the user changed it).",
-  "Call log_action only for a change made outside Life Diff. Skip reads. Show the receipt only when something changed. When nothing changed, rely on get_daily_diff instead of pasting an empty receipt.",
-  "Call get_daily_diff at the end of the day (get_roundup is the same tool) and show that markdown to the user. The day follows the user's time zone. When nothing changed, that result is one short line and no card. get_daily_diff reads an open session as in progress and does not close it.",
-  "Pass repos to start_session only for repositories the user explicitly named. Do not treat a missing list item as a deletion. A failed call is a failure, not a read.",
+  "Life Diff makes session receipts and a daily roundup from calls routed through it and changes the agent reports. GitHub signs users in. Repository checks are optional. Each GitHub account shares one open session across clients.",
+  "Use namespaced tools (<upstream>__<tool>) for calls the user wants routed through Life Diff. After registering an upstream, refresh discovery. A captured call includes a session ID. If capture fails, report that separately from the upstream outcome. Check upstream state before repeating a possible write.",
+  "Use end_session with the recorded session ID when the user wants the receipt now. The idle preference sets eligibility for the next session-opening activity or scheduled sweep.",
+  "Call log_action for changes made outside the proxy. Use get_daily_diff for the local calendar day, including open activity still in progress. Show Markdown when the client skips MCP images.",
+  "Pass repos to start_session only for repositories the user explicitly named for verification.",
 ].join(" ");
 
 const dailySchema = z.object({
@@ -47,7 +47,7 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
   server.registerTool(
     "start_session",
     {
-      description: "Open a Life Diff session. A session also starts on the first proxied call, and an idle one closes itself. Pass repos only for GitHub repositories the user explicitly asked to include. With no repos, Life Diff records tool calls and does not read GitHub.",
+      description: "Open or reuse the account’s shared Life Diff session. A captured call can also open a session. A stale session can close on this call or the scheduled sweep. Pass repos only for GitHub repositories the user explicitly asked to include. With no repos, Life Diff records tool calls and does not read GitHub.",
       inputSchema: z.object({
         repos: z.array(z.string()).max(25).optional(),
         timeZone: z.string().optional(),
@@ -227,13 +227,13 @@ export async function createLifeDiffServer(env: Env): Promise<McpServer> {
       const added = await addUpstream(new D1MetadataStore(env.DB), who.userId, env.TOKEN_ENCRYPTION_KEY, new Date(), input);
       invalidateUpstreamCache(who.userId);
       try { server.sendToolListChanged(); } catch { /* stateless clients need to reconnect */ }
-      return text(`Added ${added.name}. Tools will be named ${added.name}__<tool>. Reconnect if you do not see them yet.`, { upstream: added, reconnect: true });
+      return text(`Registered ${added.name} for discovery. Refresh or reconnect and look for ${added.name}__<tool>. If none appear, check the endpoint and credentials and try discovery again.`, { upstream: added, discoveryStatus: "pending", reconnect: true });
     }),
   );
   server.registerTool(
     "list_upstreams",
     {
-      description: "List MCP servers registered for this Life Diff account. Tokens are not included.",
+      description: "List MCP servers registered for this Life Diff account. This lists saved connections. Confirm discovery in the client tool catalog.",
       inputSchema: z.object({}),
     },
     async () => run(async () => {

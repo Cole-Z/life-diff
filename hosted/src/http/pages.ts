@@ -1,3 +1,6 @@
+import { receiptStyles } from "../receipt/page";
+import { renderSampleCard } from "../receipt/sample";
+import { copyTextScript } from "./copy";
 import { escapeHtml } from "../text";
 
 export interface ConsentView {
@@ -28,21 +31,51 @@ export function renderConsentPage(view: ConsentView, handle: string): string {
     </form>`);
 }
 
-export function renderHome(): string {
-  return layout("Life Diff", `<h1>Life Diff</h1>
-    <p>What did all your AI agents change today?</p>
-    <p>Add <code>https://lifediff.dev/mcp</code> to your agent. Register the other tools it should use, and Life Diff writes one color-coded before-and-after receipt for the day.</p>
-    <p>GitHub is only the sign-in. Repository history stays off until you name repositories for a session and turn it on here.</p>
-    <p><a href="/settings">Settings</a> · <a href="/roundup">Today</a> · <a href="/account">Account</a> · <a href="/privacy">Privacy</a></p>`);
+const clientGuide = "https://github.com/Cole-Z/life-diff/blob/main/docs/connect.md";
+
+export function renderHome(endpoint: string): string {
+  return layout("Life Diff · Receipts for AI tool activity", `
+    <h1 class="hero-title">Get a receipt for what your AI agents changed.</h1>
+    <p class="hero-copy">Life Diff is a hosted MCP proxy with session receipts and a daily roundup. Receipts show tool calls routed through Life Diff, changes your agent reports, and optional checks on GitHub repositories you name.</p>
+    <p class="actions"><a class="action primary" href="/sample-receipt">See a sample receipt</a><a class="action" href="#connect">Connect your client</a></p>
+    ${renderSampleCard(true)}
+    <section class="setup" aria-labelledby="connect">
+      <h2 id="connect" tabindex="-1">Connect your client</h2>
+      <ol>
+        <li><strong>Add Life Diff.</strong> Open the <a href="${clientGuide}">client setup guide</a> and add the endpoint as a remote Streamable HTTP MCP server.
+          ${endpointInput(endpoint)}
+        </li>
+        <li><strong>Sign in with GitHub.</strong> Approve the Life Diff access prompts in your client. GitHub signs you into the hosted service. Repository checks require a separate opt-in.</li>
+        <li><strong>Run a first lookup.</strong> Add DeepWiki as an upstream, a tool server whose calls you want routed through Life Diff. Follow the <a href="${clientGuide}#first-lookup">read-only smoke test</a> to make one lookup and open its receipt.</li>
+      </ol>
+    </section>
+    <nav aria-label="Life Diff"><a href="/settings">Settings</a><a href="/roundup">Today</a><a href="/account">Account</a><a href="/privacy">Privacy</a></nav>`, true);
+}
+
+export function renderSample(): string {
+  return layout("Sample receipt · Life Diff", `${renderSampleCard()}
+    <p class="actions"><a class="action primary" href="/#connect">Connect your client</a><a href="/">Back to Life Diff</a></p>`, true);
+}
+
+function endpointInput(endpoint: string): string {
+  return `<div class="endpoint" data-copy-group>
+    <label for="mcp-endpoint">MCP endpoint</label>
+    <div class="actions">
+      <input id="mcp-endpoint" value="${escapeHtml(endpoint)}" data-copy-value readonly spellcheck="false">
+      <button type="button" data-copy>Copy endpoint</button>
+    </div>
+    <span role="status"></span>
+  </div>${copyTextScript}`;
 }
 
 export function renderPrivacy(): string {
-  return layout("Privacy", `<h1>Privacy</h1>
-    <p>Life Diff stores your GitHub login, an encrypted GitHub token, session snapshots, action logs, and receipts. It does not store file bodies and it does not write to GitHub.</p>
-    <p>If you register an upstream MCP server, Life Diff stores its URL and an encrypted token. Tool arguments are stored with token, secret, password, authorization, key, and cookie values removed. Life Diff only sees calls that the agent sends through Life Diff.</p>
-    <p>Snapshots of an open session are kept for 7 days if you never end it. After a session ends, the snapshot is kept for 24 hours and the receipt for 90 days. Those are the defaults.</p>
-    <p>Signed-in users can delete everything from the <a href="/account">account page</a>. An agent can call <code>DELETE /v1/me</code> with its Life Diff token.</p>
-    <p>This is a draft for review. The full note is in PRIVACY.md.</p>`);
+  return layout("Privacy · Life Diff", `<h1>Hosted privacy</h1>
+    <p>GitHub signs you in. Life Diff stores your GitHub ID and login, encrypted GitHub credentials, app installation IDs, preferences, and MCP grants. GitHub checks use metadata from repositories you explicitly name and have made available to the app.</p>
+    <p>Life Diff stores registered upstream URLs and encrypted credentials. Receipts and action logs can contain bounded tool arguments, result or error excerpts, and agent-reported text. Those fields can include ordinary file, message, or document content. Redaction masks secret-like fields and recognized patterns and can miss sensitive content. Calls go to their upstream with the original arguments.</p>
+    <p>Defaults are 90 days for receipts, 24 hours for snapshots after close, and seven days for abandoned sessions. Hourly maintenance applies those limits. Daily pages have no separate age limit.</p>
+    <p>GitHub sign-in sets a seven-day browser session. Approved clients can use their Life Diff tokens. Anyone holding a signed HTML link can view its specific receipt or day for 24 hours, subject to the data still being available. Card image URLs also contain access credentials. Keep these URLs private.</p>
+    <p><a href="/settings">Clear history</a> removes saved sessions, receipts, and daily pages and keeps your sign-in, settings, and upstreams. <a href="/account">Delete my Life Diff data</a> also removes the Life Diff account, credentials, and grants. GitHub authorizations are managed separately on GitHub.</p>
+    <p><a href="https://github.com/Cole-Z/life-diff/blob/main/PRIVACY.md">Full hosted data and privacy details</a></p>`);
 }
 
 export function renderAccount(login: string, csrf: string): string {
@@ -64,7 +97,9 @@ export function renderDeleted(): string {
 
 export function renderMcpBrowserPage(endpoint: string): string {
   return layout("Life Diff MCP", `<h1>This is the Life Diff MCP endpoint</h1>
-    <p>Add <code>${escapeHtml(endpoint)}</code> as a remote MCP server in an MCP client.</p>`);
+    <p>Add this URL as a remote MCP server in your client and sign in with GitHub when prompted.</p>
+    ${endpointInput(endpoint)}
+    ${setupLinks()}`);
 }
 
 export interface SettingsUpstream {
@@ -87,16 +122,16 @@ export function renderSettings(login: string, csrf: string, upstreams: SettingsU
     : upstreams.map((item) => `<li>
         <strong>${escapeHtml(item.name)}</strong>
         <div><code>${escapeHtml(item.url)}</code></div>
-        <div>${item.hasToken ? "Token saved" : "No token"}</div>
+        <div>${item.hasToken ? "Token saved" : "No token"} · Registered for discovery</div>
         <form method="post" action="/settings/remove">
           <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
           <input type="hidden" name="name" value="${escapeHtml(item.name)}">
           <button>Remove</button>
         </form>
       </li>`).join("");
-  const message = error ? `<p>${escapeHtml(error)}</p>` : "";
+  const message = error ? `<p role="alert">${escapeHtml(error)}</p>` : "";
   return layout("Settings", `<h1>Settings</h1>
-    <p>Signed in as <strong>${escapeHtml(login)}</strong>. A day is your local calendar day. Life Diff stores the day's diff at the end of your workday.</p>
+    <p>Signed in as <strong>${escapeHtml(login)}</strong>. A day is your local calendar day. An hourly job saves the roundup after your workday ends.</p>
     ${message}
     <form method="post" action="/settings/preferences">
       <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
@@ -104,13 +139,14 @@ export function renderSettings(login: string, csrf: string, upstreams: SettingsU
       <label>End of workday <input name="dayEnd" type="time" required value="${escapeHtml(settings.dayEnd)}"></label>
       <label><input type="checkbox" name="githubDaily" value="on" ${settings.githubDaily ? "checked" : ""}> Include GitHub repository changes in the daily diff</label>
       <p>Off until you turn it on. Life Diff only reads repositories you name in <code>start_session</code>.</p>
-      <label>Quiet minutes before a session closes <input name="idleMinutes" type="number" min="5" max="180" required value="${escapeHtml(String(settings.idleMinutes))}"></label>
+      <label>Idle minutes before a session is eligible to close <input name="idleMinutes" type="number" min="5" max="180" required value="${escapeHtml(String(settings.idleMinutes))}"></label>
+      <p>An eligible session is finalized on the next session-opening activity or scheduled sweep. Use <code>end_session</code> to close it now.</p>
       <label><input type="checkbox" name="quietDays" value="on" ${settings.quietDays ? "checked" : ""}> Don't save the daily page when nothing changed</label>
       <button>Save</button>
     </form>
     <h2>Tools your agents use</h2>
-    <p>Tools from these servers appear as <code>name__tool</code>. Life Diff records each call. The token stays on Life Diff and is not shown again.</p>
-    <ul>${rows}</ul>
+    <p>Registration saves the connection for discovery. Refresh or reconnect your client and look for <code>name__tool</code> to confirm the upstream published tools.</p>
+    ${upstreams.length ? `<ul>${rows}</ul>` : rows}
     <form method="post" action="/settings">
       <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
       <label>Name <input name="name" required maxlength="33" autocomplete="off"></label>
@@ -118,7 +154,7 @@ export function renderSettings(login: string, csrf: string, upstreams: SettingsU
       <label>Token, optional <input name="token" type="password" autocomplete="off"></label>
       <button>Add upstream</button>
     </form>
-    <p>After adding one, reconnect the agent if it still shows the old tool list.</p>
+    <p>If tools are missing, check the upstream URL and credentials, then refresh or reconnect. An upstream may be unreachable or publish zero tools. <a href="${clientGuide}#troubleshooting">Troubleshoot discovery</a></p>
     <h2>History</h2>
     <p>This deletes sessions, receipts, and daily diffs for this account. Upstream servers and the GitHub sign-in stay.</p>
     <form method="post" action="/settings/clear">
@@ -128,9 +164,19 @@ export function renderSettings(login: string, csrf: string, upstreams: SettingsU
     </form>`);
 }
 
-export function renderSignedOut(): string {
-  return layout("Account", `<h1>Account</h1>
-    <p>Sign in from an MCP client first. Life Diff sets a browser session when GitHub sends you back, and this page uses that session.</p>`);
+export function renderSignedOut(page: "Account" | "Settings" | "Today"): string {
+  const purpose = {
+    Account: "Manage your Life Diff account and data after signing in.",
+    Settings: "Manage upstream tools and receipt preferences after signing in.",
+    Today: "See the daily roundup of your sessions after signing in.",
+  }[page];
+  return layout(`${page} · Life Diff`, `<h1>${page}</h1>
+    <p>${purpose} Sign in with GitHub from your MCP client, then return here in the same browser.</p>
+    ${setupLinks()}`);
+}
+
+function setupLinks(): string {
+  return `<p class="actions"><a class="action primary" href="/#connect">Connect your client</a><a href="/sample-receipt">See a sample receipt</a></p>`;
 }
 
 function scopeLabel(scope: string): string {
@@ -144,7 +190,7 @@ function scopeLabel(scope: string): string {
   }
 }
 
-function layout(title: string, body: string): string {
+function layout(title: string, body: string, receipt = false): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -152,21 +198,44 @@ function layout(title: string, body: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
 <style>
-  :root { color-scheme: light dark; --paper: #f3efe6; --ink: #1c1915; --mast: #1e3a32; --mast-ink: #f6f1e7; --card: #fffdf8; --line: #e4dccd; }
+  ${receipt ? receiptStyles : ""}
+  :root { color-scheme: light dark; --paper: #f3efe6; --ink: #1c1915; --mast: #1e3a32; --mast-ink: #f6f1e7; --surface: #fffdf8; --link: #1b5342; --focus: #205bb1; }
   @media (prefers-color-scheme: dark) {
-    :root { --paper: #161310; --ink: #f4efe6; --mast: #10241e; --card: #221e1a; --line: #3a332c; }
+    :root { --paper: #161310; --ink: #f4efe6; --mast: #10241e; --surface: #221e1a; --link: #9de1bf; --focus: #f5a524; }
   }
-  body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 "Segoe UI", Helvetica, Arial, sans-serif; }
-  header { background: var(--mast); color: var(--mast-ink); padding: 28px 20px; }
-  header p { font-family: Georgia, Palatino, serif; font-size: 34px; margin: 0; }
-  main { max-width: 720px; margin: 0 auto; padding: 24px 20px 64px; }
-  form, fieldset { display: grid; gap: 12px; }
-  button { font: inherit; padding: 8px 14px; }
-  a { color: var(--mast); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 "Segoe UI", Helvetica, Arial, sans-serif; overflow-wrap: anywhere; }
+  header { background: var(--mast); color: var(--mast-ink); padding: 12px 20px; }
+  header p { max-width: 720px; margin: 0 auto; font: 26px/1.5 Georgia, Palatino, serif; }
+  header a { color: inherit; text-decoration: none; }
+  header a:hover { text-decoration: underline; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 20px 64px; }
+  h1, h2 { line-height: 1.12; }
+  .hero-title { font: 700 clamp(2.15rem, 1.5rem + 3.5vw, 3.6rem)/1.06 Georgia, Palatino, serif; max-width: 18ch; margin: 0; }
+  .hero-copy { max-width: 61ch; font-size: 1.08rem; }
+  .actions, nav { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
+  .action, button { display: inline-block; border: 1px solid currentColor; border-radius: 8px; padding: 8px 14px; font: inherit; }
+  .action { text-decoration: none; }
+  .action:hover { text-decoration: underline; }
+  .action.primary { background: var(--mast); color: var(--mast-ink); }
+  .setup { margin-block: 32px; }
+  ol { padding-inline-start: 24px; }
+  li + li { margin-top: 12px; }
+  form, fieldset { display: grid; gap: 12px; min-inline-size: 0; }
+  button { cursor: pointer; }
+  input:not([type=checkbox]) { max-width: 100%; padding: 6px; font: inherit; }
+  .endpoint { margin: 8px 0 14px; }
+  .endpoint label { display: block; font-size: .875rem; }
+  .endpoint input { width: min(100%, 28ch); min-width: 0; background: var(--surface); color: var(--ink); }
+  [role=status] { font-size: .875rem; }
+  a { color: var(--link); }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+  header :focus-visible, .action.primary:focus-visible { outline-color: var(--mast-ink); }
+  .action.primary:focus-visible { outline-offset: -5px; }
 </style>
 </head>
 <body>
-<header><p>Life Diff</p></header>
+<header><p><a href="/">Life Diff</a></p></header>
 <main>${body}</main>
 </body>
 </html>`;

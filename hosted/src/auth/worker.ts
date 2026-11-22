@@ -15,7 +15,7 @@ import { sealCredentials } from "../github/tokens";
 import { D1MetadataStore, R2ObjectStore } from "../storage/d1";
 import { deleteUserData } from "../storage/retention";
 import { revokeAllGrants } from "./grants";
-import { renderAccount, renderConsentPage, renderDeleted, renderHome, renderPrivacy, renderSignedOut } from "../http/pages";
+import { renderAccount, renderConsentPage, renderDeleted, renderHome, renderPrivacy, renderSample, renderSignedOut } from "../http/pages";
 import { handleRoundup } from "../http/roundup";
 import { handleSettings } from "../http/settings";
 import { sessionSweeper } from "../app/runtime";
@@ -53,7 +53,8 @@ export async function handleApp(request: Request, env: Env, ctx: ExecutionContex
     if (url.pathname === "/roundup" || url.pathname.startsWith("/roundup/")) return await handleRoundup(request, env);
     if (url.pathname === "/privacy") return html(renderPrivacy());
     if (url.pathname === "/health") return Response.json({ ok: true });
-    if (url.pathname === "/") return html(renderHome());
+    if (url.pathname === "/sample-receipt" && request.method === "GET") return html(renderSample());
+    if (url.pathname === "/") return html(renderHome(env.MCP_SERVER_URL));
   } catch (error) {
     if (error instanceof AuthorizationError) {
       if (error.redirectTo) return Response.redirect(error.redirectTo, 302);
@@ -148,14 +149,14 @@ async function callback(request: Request, env: Env): Promise<Response> {
 
 async function account(request: Request, env: Env): Promise<Response> {
   const session = await currentSession(request, env);
-  if (!session) return html(renderSignedOut());
+  if (!session) return html(renderSignedOut("Account"));
   return html(renderAccount(session.login, session.csrf));
 }
 
 async function deleteAccount(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
   const session = await currentSession(request, env);
-  if (!session) return html(renderSignedOut(), 401);
+  if (!session) return html(renderSignedOut("Account"), 401);
   const form = await request.formData();
   if (form.get("confirm") !== "delete" || form.get("csrf") !== session.csrf) {
     return new Response("The deletion form did not match this session.", { status: 400 });

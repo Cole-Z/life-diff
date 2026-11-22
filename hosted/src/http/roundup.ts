@@ -14,7 +14,7 @@ export async function handleRoundup(request: Request, env: Env): Promise<Respons
   const viewToken = url.searchParams.get("t");
   if (viewToken) return serveSignedDay(request, env, viewToken);
   const session = await browserSession(request, env);
-  if (!session) return html(renderSignedOut(), 401);
+  if (!session) return html(renderSignedOut("Today"), 401);
   const dated = /^\/roundup\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);
   const deps = {
     ...coreDeps(env, { userId: session.sub, login: session.login }),
@@ -34,8 +34,8 @@ async function serveSignedDay(request: Request, env: Env, token: string): Promis
   const url = new URL(request.url);
   const grant = await readViewGrant(env.COOKIE_SIGNING_KEY ?? "", token, Math.floor(Date.now() / 1000));
   const dated = /^\/roundup\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);
-  if (!grant || grant.kind !== "day" || (dated?.[1] && dated[1] !== grant.id)) {
-    return new Response("This link expired or is not valid.", { status: 401 });
+  if (!grant || grant.kind !== "day" || dated?.[1] !== grant.id) {
+    return new Response("This link expired or is not valid.", { status: 401, headers: privateViewHeaders });
   }
   const deps = {
     ...coreDeps(env, { userId: grant.userId, login: "viewer" }),
@@ -55,9 +55,14 @@ async function serveRoundupCard(env: Env, token: string): Promise<Response> {
   if (!/^[a-f0-9]{32}$/.test(token)) return new Response("Not found", { status: 404 });
   const png = await new R2ObjectStore(env.RECEIPTS).getBytes(roundupCardKey(token));
   if (!png) return new Response("Not found", { status: 404 });
-  return new Response(png, { headers: { "content-type": "image/png", "cache-control": "private, max-age=300" } });
+  return new Response(png, { headers: { ...privateViewHeaders, "content-type": "image/png" } });
 }
 
+const privateViewHeaders = {
+  "cache-control": "private, no-store",
+  "referrer-policy": "no-referrer",
+};
+
 function html(body: string, status = 200): Response {
-  return new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
+  return new Response(body, { status, headers: { ...privateViewHeaders, "content-type": "text/html; charset=utf-8" } });
 }

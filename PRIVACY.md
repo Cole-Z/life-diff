@@ -1,46 +1,27 @@
-# Life Diff privacy draft
+# Hosted Life Diff privacy
 
-This is a draft for Cole to review before the hosted service is deployed. It describes the hosted Worker at `https://lifediff.dev`. The self-run command is different: it keeps Google Calendar and Drive data on the machine that runs it, and hosted Life Diff does not use Google at all.
+This describes the service at `https://lifediff.dev`. The [local Google snapshot workflow](docs/local-google.md#local-data) uses its own read-only OAuth setup and keeps its files on the machine running it.
 
-## What is stored
+## Data the hosted service stores
 
-For a person who installs the GitHub App and signs in:
+- GitHub user ID and login, the GitHub App installation IDs returned by GitHub, and encrypted GitHub access and refresh tokens. GitHub signs you into the service. Repository checks require app access and a list of repositories you name for the session.
+- When a session checks GitHub, snapshots and changes can include branch names, commit IDs and messages, pull request and issue titles and labels, comments, and file paths. GitHub file changes use line counts such as `+10 −2`. The GitHub verification feed reads metadata and does not store repository file bodies or patches.
+- Upstream MCP server URLs, optional encrypted credentials, and account preferences including time zone, end of workday, idle minutes, and daily GitHub and quiet-day settings.
+- For tool calls routed through Life Diff, the upstream and tool name, bounded arguments, timing and outcomes, a short result or error excerpt, and a client name when available. Explicit agent reports may include details and before/after text. Ordinary text in those fields can include file content, messages, or document content. Receipt JSON, HTML and generated cards, and daily roundups can include this material.
+- MCP OAuth grants and Life Diff tokens. Grant properties identify the GitHub user ID and login. Clients receive Life Diff access, not the GitHub credential.
 
-- GitHub user id and login.
-- The GitHub user-to-server access token and refresh token, encrypted with AES-GCM. The key is a Worker secret and is not stored next to the token.
-- GitHub App installation ids and the account login GitHub returns with them.
-- A session snapshot of repository metadata: branch names and commit ids, pull request and issue titles and labels, and later the commits, comments, and file paths that changed. File bodies and patches are not stored. A file change is recorded as a line count such as `+10 −2`.
-- An action log of what an agent claimed it did (`log_action` or `POST /v1/sessions/:id/actions`). Life Diff does not run those tools.
-- For a call Life Diff forwarded: the tool name, the arguments, and a short result. Before anything is written to D1 or R2, values whose keys contain `token`, `password`, `secret`, `authorization`, `api_key`, `cookie`, `credential`, or `key` are replaced with `[redacted]`, including nested keys. Every stored string is also scanned for secret values in the text itself: `key=value` and `key: value` pairs for `api_key`, `apikey`, `token`, `access_token`, `secret`, `password`, `passwd`, `pwd`, `authorization`, `cookie`, `private_key`, and `client_secret`; `Bearer` tokens; and well-known token shapes (`ghp_`, `gho_`, `ghs_`, `github_pat_`, `sk_live_`, `sk_test_`, `rk_`, Slack `xox`-style tokens, `AKIA` keys, `AIza` keys, JWTs, and private-key blocks). The key, the separator, and a Bearer scheme are preserved (`password: [redacted]`, `password=[redacted]`, `Authorization: Bearer [redacted]`). Claim text and summaries get the same scan. Markdown, HTML, the card, and JSON are scanned again on the way out. The result snippet is capped. The call sent to the upstream is not redacted.
-- Receipt JSON and the HTML report, in object storage, plus counts and expiry in the database.
-- A daily diff for each local calendar day, stored so `/roundup` and `get_daily_diff` can return it. The stored settings are the IANA time zone (default America/Chicago), the end-of-workday time (default 18:00), and whether GitHub repository changes are included.
-- MCP access grants issued by Life Diff. A grant records the GitHub user id and login only. It does not contain the GitHub token. MCP clients receive a Life Diff token, not the GitHub token.
+Life Diff masks values in secret-like keys and recognizes patterns such as bearer credentials, secret assignments in text, and common token formats. This redaction is best effort. Arbitrary private text and unrecognized secrets can survive in storage and display. A forwarded tool receives the original arguments. Upstream credentials are encrypted at rest and are used to authenticate to the registered upstream. Hosted Life Diff does not access Google directly as a data provider. A Google tool used through an upstream can still send Google-derived content through the proxy.
 
-## What is not stored
+## Access and signed links
 
-- Google account data, calendars, or Drive files.
-- Repository file contents or unified diffs.
-- The GitHub token inside an MCP token or an MCP grant.
-- Webhook deliveries. The GitHub App webhook stays off. Life Diff reads GitHub when a session starts and when it ends.
+- The GitHub callback sets a seven-day signed browser session cookie. Open Settings and Today in the browser that completed sign-in. An approved MCP client uses its own Life Diff token.
+- `end_session`, `get_receipt`, and `get_daily_diff` can provide a signed HTML view link scoped to one receipt or day. Anyone with the link can open that report for **24 hours** without a browser session, while the data is available. A link for the current day can reflect new activity on that day.
+- Card image URLs carry separate access tokens and can open their image while the stored card is available. Treat both kinds of URLs as access credentials. Keep them out of shared chat, issues, screenshots, and logs.
+- Signed HTML responses request no storage by browser or intermediary caches and no referrer forwarding. Recipients can still retain a copy. Undo prompt pages require the account's browser session or an authorized Life Diff token.
 
-## How long it is kept
+## Retention and deletion
 
-These are the defaults baked into the Worker configuration:
+By default, receipts expire after **90 days**, snapshots of closed sessions after **24 hours**, and abandoned open sessions after **seven days**. Maintenance runs hourly. Daily roundups have no separate age limit. An idle session can be finalized before the abandoned-session limit.
 
-- Receipts are deleted 90 days after they are created.
-- After a session ends, the snapshot is deleted 24 hours later.
-- An open session that is never ended is deleted after 7 days, along with its snapshot and action log.
-
-An hourly job applies those limits and finalizes a daily diff after the person's local end of workday. Deleting a receipt, snapshot, or daily diff removes both the database row and the stored object.
-
-## How to delete it
-
-- On `https://lifediff.dev/settings`, **Clear my history** deletes sessions, receipts, and daily diffs. It leaves the GitHub sign-in and the registered upstream servers. An agent can call `clear_my_history` with `confirm: true` for the same thing.
-- In a browser, after GitHub has sent you back to Life Diff, open `https://lifediff.dev/account` and use **Delete my Life Diff data**. That form posts to `/account/delete` with a CSRF token. That deletes the account, including the GitHub sign-in, upstreams, settings, and history.
-- An agent with a Life Diff token can call `DELETE https://lifediff.dev/v1/me`.
-
-Deletion removes the user row, the encrypted GitHub token, installation ids, sessions, the action log, snapshots, receipts, and Life Diff MCP grants. It does not change GitHub. Uninstall the Life Diff GitHub App from GitHub settings separately. GitHub may keep its own copy of the authorization until that uninstall or a revoke on GitHub's side.
-
-## Who can read it
-
-The person who authorized the app, and MCP clients they approve, can read their receipts and log actions on their open session. Receipt HTML is served only with that person's Life Diff token. Tokens are checked against the resource `https://lifediff.dev/mcp`.
+- **Clear my history** on [Settings](https://lifediff.dev/settings), or `clear_my_history` with `confirm: true`, deletes sessions, action history, snapshots, saved receipts, and daily roundups. Account sign-in, preferences, and upstream registrations stay. Old receipt links lose their stored receipt. A day link can still render an empty day and can show newly collected activity for its date until the link expires.
+- **Delete my Life Diff data** on [Account](https://lifediff.dev/account), or authenticated `DELETE /v1/me`, also removes the Life Diff account, settings, registered upstreams, encrypted credentials, and MCP grants. The browser form clears that browser's Life Diff cookie. Upstream data and GitHub authorization are managed separately. To revoke the app on GitHub, use GitHub's installed or authorized GitHub App settings.

@@ -67,6 +67,7 @@ export interface StoryLine {
   readCount?: number;
   repo?: string;
   client?: string;
+  lookupClients?: string[];
   trust?: string;
   hint?: string;
   /** Set after undo_change or undo_session. The prompt stays, the row no longer offers a fresh Undo link. */
@@ -137,6 +138,7 @@ export function condenseLines(lines: StoryLine[], input: { detail: boolean }): S
       trust: lookupTrust(first.source, first.service),
       details: items.map((item) => ({ text: item.summary })),
       ...(clients.size === 1 ? { client: [...clients][0] } : {}),
+      ...(clients.size > 1 ? { lookupClients: [...clients] } : {}),
     });
   }
   return assignIds(dedupeUndo(orderLines(folded))).map(stampTrust);
@@ -164,7 +166,7 @@ export function renderStory(input: {
   const visible = Number.isFinite(max) ? bodyAll.slice(0, max) : bodyAll;
   const body = coalesceRepos(visible);
   const hidden = bodyAll.length - visible.length;
-  const clients = new Set(input.lines.map((line) => line.client).filter((client): client is string => Boolean(client)));
+  const clients = new Set(clientNames(input.lines));
   const showClient = clients.size > 1;
   const eyebrow = input.eyebrow ?? (input.link.includes("/roundup") || /day/i.test(input.linkLabel) ? "TODAY" : "SESSION DIFF");
   const title = input.title ?? agentTitle(input.lines, input.timeZone, input.startedAt, input.endedAt);
@@ -214,8 +216,12 @@ export function headlineFor(lines: StoryLine[], _label: string): string {
   return footer || "Nothing changed";
 }
 
+export function clientNames(lines: StoryLine[]): string[] {
+  return [...new Set(lines.flatMap((line) => line.lookupClients ?? (line.client ? [line.client] : [])))];
+}
+
 export function agentTitle(lines: StoryLine[], timeZone?: string, startedAt?: string, endedAt?: string, agentName?: string): string {
-  const names = [...new Set(lines.map((line) => line.client).filter((client): client is string => Boolean(client)))];
+  const names = clientNames(lines);
   const named = agentName?.trim();
   const who = names.length === 0 ? (named || "Agent") : names.join(", ");
   const times = lines.map((line) => line.time).filter((time): time is string => Boolean(time)).sort();
@@ -919,9 +925,10 @@ function collapseRetries(lines: StoryLine[]): StoryLine[] {
   const groups = new Map<string, StoryLine[]>();
   for (const line of lines) {
     if (!line.callKey) continue;
-    const group = groups.get(line.callKey) ?? [];
+    const key = `${line.callKey}\0${line.client ?? ""}`;
+    const group = groups.get(key) ?? [];
     group.push(line);
-    groups.set(line.callKey, group);
+    groups.set(key, group);
   }
   const drop = new Set<StoryLine>();
   for (const group of groups.values()) {
@@ -974,9 +981,9 @@ function formatChange(line: StoryLine, pageLink: string, showClient: boolean): s
   const trust = line.tone === "failed" || line.tone === "read" ? "" : (line.trust ?? trustLabel(line.source, line.service));
   const who = showClient && line.client ? ` · ${line.client}` : "";
   let head: string;
-  if (kind === "failed") head = `Failed · ${service}`;
-  else if (kind === "not_found") head = `? Not found · Agent said`;
-  else if (kind === "not_checked") head = `Not checked · ${service} · Agent said`;
+  if (kind === "failed") head = `Failed · ${service}${who}`;
+  else if (kind === "not_found") head = `? Not found · Agent said${who}`;
+  else if (kind === "not_checked") head = `Not checked · ${service} · Agent said${who}`;
   else if (kind === "read") head = `${service}${who}`;
   else head = `${markerFor(kind)} ${kindName(kind)} · ${service}${trust ? ` · ${trust}` : ""}${who}`;
   const href = line.undoRequested ? undefined : undoHref(pageLink, line);

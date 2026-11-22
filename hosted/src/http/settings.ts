@@ -12,7 +12,7 @@ import { validTimeZone } from "../text";
 export async function handleSettings(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const session = await browserSession(request, env);
-  if (!session) return html(renderSignedOut(), 401);
+  if (!session) return html(renderSignedOut("Settings"), 401);
   const meta = new D1MetadataStore(env.DB);
   try {
     if (request.method === "POST" && url.pathname === "/settings") {

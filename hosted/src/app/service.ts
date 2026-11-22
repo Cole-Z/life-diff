@@ -160,7 +160,6 @@ export async function endSession(deps: AppDeps, input: { sessionId?: string; cla
   const claim = await deps.sessions.claimClose(input.sessionId);
   switch (claim.status) {
     case "mismatch":
-      throw new AppError("There is no open session to end.");
     case "busy":
     case "idle": {
       const existing = await replayClosed(deps, input.sessionId, claim.status === "busy");
@@ -221,8 +220,9 @@ async function commitClose(deps: AppDeps, claim: Extract<CloseClaim, { status: "
   }
   addUnverifiedClaims(receipt, hasSnapshot ? prepared.filter((claim) => !isGitHubClaimService(claim.service)) : prepared, hasSnapshot);
   attachReadClaims(receipt, folded.readClaims);
-  const agentName = (input.agentName || open.agentName || "").trim().slice(0, 80);
-  if (agentName) receipt.agentName = agentName;
+  const clients = new Set(actions.map((action) => action.client).filter(Boolean));
+  const agentName = clients.size === 1 ? [...clients][0] : (input.agentName || open.agentName || "").trim().slice(0, 80);
+  if (clients.size < 2 && agentName) receipt.agentName = agentName;
   receipt = redactStrings(receipt);
   const jsonKey = `receipts/${deps.userId}/${receiptId}.json`;
   const htmlKey = `receipts/${deps.userId}/${receiptId}.html`;

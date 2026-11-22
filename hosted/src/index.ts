@@ -74,6 +74,7 @@ function mcpBrowserPage(response: Response, endpoint: string): Response {
   const headers = new Headers(response.headers);
   headers.delete("content-length");
   headers.set("content-type", "text/html; charset=utf-8");
+  headers.set("referrer-policy", "no-referrer");
   return new Response(renderMcpBrowserPage(endpoint), { status: 401, statusText: response.statusText, headers });
 }
 

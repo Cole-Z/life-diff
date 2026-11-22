@@ -70,7 +70,7 @@ MCP tools, all of which require the scopes `receipts:read` and `sessions:write`:
 - `remove_upstream` removes one by name.
 - `clear_my_history` deletes sessions, receipts, and daily diffs when `confirm` is true. It leaves upstreams and the GitHub sign-in in place. The settings page has the same button.
 
-The same `/mcp` endpoint then exposes each upstream tool as `<name>__<tool>` and records every forwarded call. Signed-in browsers manage the same list at `/settings`. After adding an upstream, reconnect the MCP client if it cached the tool list.
+The same `/mcp` endpoint discovers upstream tools and exposes them as `<name>__<tool>`. The beta forwards text and object-valued structured results. Capture failures are reported alongside the upstream result. Signed-in browsers manage the same list at `/settings`. After adding an upstream, reconnect the MCP client if it cached the tool list.
 
 `0002_upstreams.sql` creates the `upstreams` table. `0003_daily.sql` adds `sessions.github_opt_in`, `user_settings` (time zone, end of workday, GitHub daily toggle), and `daily_diffs`. Apply migrations before deploying this Worker, from `hosted/`:
 
@@ -87,9 +87,11 @@ The same action log is available as `POST /v1/sessions/:id/actions` with the Lif
 
 Receipts use schema `1.0.0`, the same top-level shape as the Go core (`docs/receipt-schema.md` on the core PR). Readers ignore unknown fields. Hosted receipts add a top-level `github` object, parallel to `calendar` and `drive`, and changes may include `resourceType`, `repo`, `actor`, `viaApp`, and `labelsChanged`. File `content` is a line count such as `+10 −2`, not a patch or file body.
 
-The HTML receipt, the daily page, and the PNG card are the same rounded card. Added is green, changed is amber, removed and failed are red, and moved and shared are blue. A checked change is tagged Verified. A forwarded write or a change only the agent reported is tagged Agent said. A lookup Life Diff forwarded is tagged Sent to that service. A GitHub claim with no matching change is Not found. A claim for a service Life Diff cannot check is Not checked. Lookups collapse into the footer. A failed line's structured trust is `Failed in Notion`, and a reason that starts with `Error:` or `Error -` drops that label. With detail on, each line sits under its own repository heading (or Other when it has none), even when that repository's lookups were not consecutive. `get_daily_diff` reads an open session as still in progress and does not close it. `end_session` on a session already closed in the last day returns the receipt that close saved. `undo_change` and `undo_session` return an undo prompt and record that an undo was requested. They do not run it. `/receipts/<id>/undo` and `/receipts/<id>/undo/<changeId>` require the same sign-in as the receipt. A lookup-only `end_session` omits `imageUrl` and `cardToken`; `get_receipt` still returns the card and an `undos` list. Links on GitHub rows are limited to `https://github.com`. A signed-in browser can open `/receipts/<id>` with the session cookie set at GitHub sign-in. `end_session`, `get_receipt`, and `get_daily_diff` also return a `viewUrl` signed for 24 hours so that one page can be opened without signing in. The link is scoped to that receipt or that day.
+The HTML receipt, the daily page, and the PNG card are the same rounded card. Added is green, changed is amber, removed and failed are red, and moved and shared are blue. A checked change is tagged Verified. A forwarded write or a change only the agent reported is tagged Agent said. A lookup Life Diff forwarded is tagged Sent to that service. A GitHub claim with no matching change is Not found. A claim for a service Life Diff cannot check is Not checked. Lookups collapse into the footer. A failed line's structured trust is `Failed in Notion`, and a reason that starts with `Error:` or `Error -` drops that label. With detail on, each line sits under its own repository heading (or Other when it has none), even when that repository's lookups were not consecutive. `get_daily_diff` reads an open session as still in progress and does not close it. `end_session` on a session already closed in the last day returns the receipt that close saved. `undo_change` and `undo_session` return an undo prompt and record that an undo was requested. They do not run it. `/receipts/<id>/undo` and `/receipts/<id>/undo/<changeId>` require a browser session or authorized Life Diff token. A lookup-only `end_session` omits `imageUrl` and `cardToken`; `get_receipt` still returns the card and an `undos` list. Links on GitHub rows are limited to `https://github.com`. A signed-in browser can open `/receipts/<id>` with the session cookie set at GitHub sign-in. `end_session`, `get_receipt`, and `get_daily_diff` also return a `viewUrl` signed for 24 hours so that one page can be opened without signing in. The link is an access credential scoped to that receipt or day. See [hosted privacy](../PRIVACY.md).
 
 ## How a session is stored
+
+Each GitHub account has one shared open session. The default 20-minute idle preference sets eligibility. New session-opening activity checks for stale sessions, as does the hourly cron at minute 05. Reading the current roundup may show an open session in progress. Close explicitly with `end_session` when you need a receipt immediately.
 
 | Store | Holds |
 | --- | --- |
@@ -168,3 +170,12 @@ npm run typecheck
 ```
 
 Tests use vitest in Node with fake GitHub responses. They do not call `api.github.com`. CI is `.github/workflows/hosted.yml`.
+
+## Regenerate the public fixture images
+
+From `hosted/`, install Playwright Chromium and run the fixture capture script. It uses the checked-in synthetic receipt and writes the light and dark receipt screenshots, roundup screenshots, and the 1200 × 630 social preview to `docs/images/`.
+
+```sh
+npx playwright install chromium
+npx tsx scripts/capture-demo.ts
+```

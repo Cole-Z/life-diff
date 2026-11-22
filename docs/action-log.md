@@ -1,8 +1,6 @@
 # Action log
 
-Life Diff records tool calls that an agent routes through it. A row is tagged **Verified** when a service's own history matched it, and **Agent said** when Life Diff only has the agent's report. Neither tag means the account changed, and neither one means the tool did what the agent intended. The sentence a person sees names the object and the service. It does not include the raw tool name. The longer definitions stay in the receipt notes.
-
-Where a service exposes its own history, Life Diff can also read that history. Today that check is GitHub. Those lines are **Verified in GitHub**. Provider diffs stay the source of truth for that service. The action log is the list of calls the proxy saw.
+Life Diff records calls routed through it and changes an agent explicitly reports. **Verified** means Life Diff independently corroborated a supported change. **Agent said** identifies an agent report or a forwarded write without independent confirmation. The hosted verification feed checks opted-in [GitHub repositories](github-checks.md).
 
 ## Hosted proxy
 
@@ -10,9 +8,9 @@ A signed-in user registers upstream MCP servers, either on `https://lifediff.dev
 
 Each upstream is a streamable HTTP URL plus an optional bearer token or static header. The secret is encrypted with `TOKEN_ENCRYPTION_KEY` (AES-GCM, the same pattern as the GitHub token) and stored in D1. It is not written to logs and it is not returned by `list_upstreams` or the settings page.
 
-`https://lifediff.dev/mcp` keeps the existing tools (`start_session`, `log_action`, `end_session`, `get_receipt`, `list_receipts`) and also exposes every upstream tool as `<upstream>__<tool>`. `tools/list` and `tools/call` are forwarded. Life Diff starts an MCP session with the upstream (`initialize`, `notifications/initialized`, and the `mcp-session-id` header) and accepts either a JSON body or an SSE `event: message` body.
+`https://lifediff.dev/mcp` keeps the existing tools (`start_session`, `log_action`, `end_session`, `get_receipt`, `list_receipts`) and exposes discovered upstream tools as `<upstream>__<tool>`. `tools/list` and `tools/call` are forwarded. Life Diff starts an MCP session with the upstream (`initialize`, `notifications/initialized`, and the `mcp-session-id` header) and accepts either a JSON body or an SSE `event: message` body.
 
-Every forwarded `tools/call` is appended to the user's open session. If none is open, Life Diff opens one. A session opened this way has no GitHub snapshot. `start_session` reads GitHub only for repositories passed in `repos`. A later `start_session` with a different list closes the previous session instead of keeping the wider one.
+Life Diff attempts to record the call after it receives the upstream response. Clients on the same GitHub account share one open session. If none is open, Life Diff opens one. A session opened this way has no GitHub snapshot. `start_session` reads GitHub only for repositories passed in `repos`. A later `start_session` with a different list closes the previous session instead of keeping the wider one.
 
 A recorded call stores:
 
@@ -21,7 +19,7 @@ A recorded call stores:
 | time | When the response came back. |
 | upstream | Registered name. |
 | tool | Upstream tool name, not the namespaced name. |
-| arguments | Arguments after redaction. |
+| arguments | Bounded arguments after best-effort redaction. Ordinary document and message text can remain. |
 | status | `ok` or `error`. |
 | summary | One plain-language sentence. |
 | effect | `read`, `write`, or `unknown`. |
@@ -36,11 +34,11 @@ Classification looks at words in the tool name. `delete`, `remove`, `send`, `uns
 
 A GitHub issue or pull request is closed only when the later read says its state is closed or merged. A name that is absent from a later list is not reported as removed. `get_daily_diff` (and `get_roundup`, the same tool) returns the user's local calendar day across every session. It reads an open session as still in progress and does not close it or write its receipt. Reads collapse into the footer (`· 3 lookups`). `detail: true` lists every lookup. Lookups for one repository stay under that repository's heading, in the order that repository first appeared, even when another repository's lookups came in between. A line with no repository of its own goes under Other. If a card cannot fit every line, it ends with `+N more` so the count still matches. Lines that need a look come first: an unverified claim, a failure, then a delete, send, or permission change. Checked changes follow. A claim GitHub was checked for and missed is **Not found**. A claim for a service Life Diff cannot check yet is **Not checked**. Each other change row has an Undo link when a prompt can be written. The prompt is plain English plus the original tool and arguments when they were stored. `undo_change` and `undo_session` return that prompt and record `undo requested`. Life Diff does not run the undo, and the receipt never says that it did. The next receipt shows the reverse change only after the agent runs it. When a session or a day has no changes, claims, or failures, the chat text is one line (`Nothing changed · 2 lookups`) and no card is attached. The receipt is still saved.
 
-An upstream failure is returned to the agent as an MCP tool error and is still recorded.
+Upstream MCP error flags and object-valued structured results are forwarded along with text. The hosted beta omits non-text blocks and adds an omission notice. A relay error is returned as an MCP tool error. If receipt capture fails, Life Diff preserves the upstream result and adds a separate capture warning. Check the upstream state before taking an action that could repeat a write.
 
 MCP clients cache `tools/list`. After `add_upstream` or `remove_upstream`, Life Diff sends `notifications/tools/list_changed` when the connection can carry it. Reconnect if the new tools do not appear.
 
-`end_session` writes the receipt. If that session, or the caller's most recent session, was already closed in the last day (idle, or another close), `end_session` returns the receipt that close already saved. `get_receipt` returns a link to `https://lifediff.dev/receipts/<id>` and always renders the card when you ask for that receipt. `end_session` omits the card for a lookup-only session. The page groups calls by service, lists writes first, collapses reads, and keeps the GitHub diff when this session had a snapshot. Within a service, each line uses its own repository: the claim's `repo` field, or an `owner/repo` found in the target or arguments. A line with no repository of its own goes under Other at the end of that service, and does not keep the previous repository's heading.
+`end_session` writes the receipt. A retry with a session ID returns that session’s saved receipt if it closed in the last day. With no ID and no open session, Life Diff can return the account’s most recently closed receipt. `get_receipt` returns a link to `https://lifediff.dev/receipts/<id>` and always renders the card when you ask for that receipt. `end_session` omits the card for a lookup-only session. The page groups calls by service, lists writes first, collapses reads, and keeps the GitHub diff when this session had a snapshot. Within a service, each line uses its own repository: the claim's `repo` field, or an `owner/repo` found in the target or arguments. A line with no repository of its own goes under Other at the end of that service, and does not keep the previous repository's heading.
 
 `log_action` records a change made outside Life Diff. Do not use it for a read, or for a tool already called through Life Diff. `action` is `added`, `removed`, `modified`, `moved`, `shared`, or `read`. `move` and `rename` are `moved`. `share` is `shared`. `trash` is `removed`. Optional `before`, `after`, and `url` are the old value, the new value, and an https link. Life Diff does not run that tool. The service is taken from the tool name, so `google_calendar` is Google Calendar. A claim is compared with GitHub only when that service is GitHub and the session has a snapshot. Any other change stays on the receipt, tagged **Agent said**. A `read` is counted with the lookups. When that read matches a call Life Diff already forwarded in the same session (same service, same kind of action, and a target that lines up), it is folded into that call and marked corroborated instead of counted again. A stored receipt that logged the same read twice, once as the proxied call and once as a claim stored beside it, is counted once when the daily diff is read. `end_session` with no session id closes the open session. A proxied tool result includes that id. Show the receipt only when something changed.
 

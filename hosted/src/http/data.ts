@@ -105,16 +105,26 @@ async function serveUndo(env: Env, auth: { userId: string; login: string }, rece
 async function serveSignedReceipt(env: Env, id: string, token: string): Promise<Response> {
   const grant = await readViewGrant(env.COOKIE_SIGNING_KEY ?? "", token, Math.floor(Date.now() / 1000));
   if (!grant || grant.kind !== "receipt" || grant.id !== id) {
-    return new Response("This link expired or is not valid.", { status: 401 });
+    return signedReceiptResponse("This link expired or is not valid.", 401);
   }
   try {
     const result = await getReceipt(coreDeps(env, { userId: grant.userId, login: "viewer" }), id);
-    return new Response(result.html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } });
+    return signedReceiptResponse(result.html);
   } catch (error) {
     const message = error instanceof AppError ? error.message : "Life Diff could not finish that request.";
-    const status = error instanceof AppError ? 404 : 500;
-    return new Response(message, { status });
+    return signedReceiptResponse(message, error instanceof AppError ? 404 : 500);
   }
+}
+
+function signedReceiptResponse(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      "content-type": status === 200 ? "text/html; charset=utf-8" : "text/plain; charset=utf-8",
+      "cache-control": "private, no-store",
+      "referrer-policy": "no-referrer",
+    },
+  });
 }
 
 async function serveReceiptCard(env: Env, id: string, token: string): Promise<Response> {
@@ -132,5 +142,5 @@ async function serveReceiptCard(env: Env, id: string, token: string): Promise<Re
   if (cardToken !== token) return new Response("Not found", { status: 404 });
   const png = await objects.getBytes(receiptCardKey(located.jsonKey));
   if (!png) return new Response("Not found", { status: 404 });
-  return new Response(png, { headers: { "content-type": "image/png", "cache-control": "private, max-age=300" } });
+  return new Response(png, { headers: { "content-type": "image/png", "cache-control": "private, no-store", "referrer-policy": "no-referrer" } });
 }

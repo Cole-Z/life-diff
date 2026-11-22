@@ -169,6 +169,16 @@ describe("signed view links", () => {
     expect(receiptPage.status).toBe(401);
     expect(dayPage.status).toBe(401);
     expect(await receiptPage.text()).toContain("expired");
+    for (const response of [receiptPage, dayPage]) {
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    }
+    const current = Math.floor(Date.now() / 1000);
+    const validDay = await signViewGrant(KEY, { kind: "day", id: "2026-04-02", userId: "42" }, current);
+    for (const path of ["/roundup", "/roundup/2026-04-03"]) {
+      const mismatched = await handleRoundup(new Request(`https://lifediff.dev${path}?t=${validDay}`), { COOKIE_SIGNING_KEY: KEY } as Env);
+      expect(mismatched.status).toBe(401);
+    }
   });
 });
 
